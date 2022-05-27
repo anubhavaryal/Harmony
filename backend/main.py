@@ -31,13 +31,12 @@ max_sentiments = {'Donuts': 1792387123, 'mossy': 123871923, 'Knuck': 12731023}
 min_sentiments = {'Donuts': 28713941234, 'mossy': 71928347891234, 'Knuck': 18029348912}
 
 # returns all messages in the channel
-def get_messages(num=100):
+def get_messages(limit=5):
     messages = []
     last_msg = None
 
-    # loop while message limit has not been reached
-    while len(messages) < num:
-        request = requests.get(f"https://discord.com/api/channels/979554513021177909/messages?limit=2&before={last_msg}" if last_msg else "https://discord.com/api/channels/979554513021177909/messages?limit=2", headers={'Authorization': f'Bot {token}'})
+    while True:
+        request = requests.get(f"https://discord.com/api/channels/979554513021177909/messages?limit=100&before={last_msg}" if last_msg else "https://discord.com/api/channels/979554513021177909/messages?limit=100", headers={'Authorization': f'Bot {token}'})
 
         # if rate limited, wait "retry_after" seconds
         if request.status_code == 429:
@@ -60,7 +59,11 @@ def get_messages(num=100):
                 continue
 
             print(message['content'])
-            # print(message)
+            messages.append(message)
+
+            # stop once message limit has been reached
+            if len(messages) >= limit:
+                break
         
         # update id of last message
         last_msg = data[-1]['id']
@@ -76,6 +79,3 @@ def cluster(text):
     cons_dist = 1
 
 get_messages()
-
-# print(get_messages().json()[0])
-# print(get_messages().headers)
