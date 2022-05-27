@@ -8,15 +8,6 @@ import re
 
 load_dotenv()
 
-# nlp = spacy.load('en_core_web_sm')
-
-# # neuralcoref.add_to_pipe(nlp, conv_dict={'Donuts':['person']})
-# neuralcoref.add_to_pipe(nlp, blacklist=False)
-
-# doc = nlp(u'')
-
-# print(doc._.has_coref)
-# print(doc._.coref_clusters)
 
 # load discord token from .env 
 token = os.getenv("DISCORD_TOKEN")
@@ -70,12 +61,17 @@ def get_messages(limit=5):
     
     return messages
 
-
-def cluster(text):
+# creates clusters of messages based on channel and time frame to prepare for coref
+def cluster(messages):
     # max amount of time between start message and last message in the cluster
     max_dist = 5
 
     # max amount of time between consecutive messages in the cluster
-    cons_dist = 1
+    dist = 1
 
-get_messages()
+# possibly prepend each message with "user said" and append each message with "i you he she" to help coreference?
+def coref():
+    pass
+
+messages = get_messages()
+print(messages[0])
