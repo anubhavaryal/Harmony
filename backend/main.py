@@ -164,7 +164,6 @@ def create_clusters(messages):
 
             # if time difference too large/surpasses max dist, create new cluster
             if last_delta > dist or first_delta > max_dist:
-                cluster.reverse()
                 clusters.append(cluster)
                 cluster = []
             
@@ -172,7 +171,6 @@ def create_clusters(messages):
     
     # add last cluster
     if len(cluster) != 0:
-        cluster.reverse()
         clusters.append(cluster)
 
     return clusters
@@ -214,8 +212,8 @@ def sentiment(messages):
 
     for message in messages:
         # add message to current group if character limit not reached
-        if len(message) + len(content) < 1000:
-            content += message + ". "
+        if len(message.content) + len(content) < 1000:
+            content += message.content + ". "
 
     return content.strip()
 
