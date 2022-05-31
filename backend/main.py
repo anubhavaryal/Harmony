@@ -39,12 +39,17 @@ class Message:
         self.content = content
         self.message_id = message_id
         self.user_id = user_id
+        self.timestamp = timestamp
         self.time = datetime.fromisoformat(timestamp)
 
 
 # load discord token from .env 
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
+
+# load nlp
+nlp = spacy.load('en_core_web_sm')
+neuralcoref.add_to_pipe(nlp, blacklist=False)
 
 # average sentiment of other users with referring to this user
 sentiments = {'Donuts': {'mossy': 0.7, 'Knuck': 0.5}, 'mossy': {'Donuts': 0.3, 'Knuck': 0.6}, 'Knuck': {'Donuts': -0.9, 'mossy': 0.5}}
@@ -86,7 +91,6 @@ def get_user_from_mention(match):
     return data['username']
 
     
-
 # returns all messages in the channel
 def get_messages(limit=5):
     # regex to find links in messages (https://daringfireball.net/2010/07/improved_regex_for_matching_urls)
@@ -135,8 +139,9 @@ def get_messages(limit=5):
     
     return messages
 
+
 # creates clusters of messages based on time frame to prepare for coref
-def cluster(messages):
+def create_clusters(messages):
     # max amount of time between start message and last message in the cluster
     max_dist = timedelta(minutes=5)
 
@@ -160,6 +165,7 @@ def cluster(messages):
 
             # if time difference too large/surpasses max dist, create new cluster
             if last_delta > dist or first_delta > max_dist:
+                cluster.reverse()
                 clusters.append(cluster)
                 cluster = []
             
@@ -167,19 +173,43 @@ def cluster(messages):
     
     # add last cluster
     if len(cluster) != 0:
+        cluster.reverse()
         clusters.append(cluster)
 
     return clusters
 
 
-# possibly prepend each message with "user said" and append each message with "i you he she" to help coreference?
-def coref():
-    pass
+# resolves coreferences in message clusters
+def coref(clusters):
+    messages = []
+
+    # pattern matches "username said "
+    user_pattern = re.compile(r"^.+ said $")
+
+    for cluster in clusters:
+        # combine all messages in cluster to assist with coreference resolution
+        cluster_message = u""
+
+        for message in cluster:
+            # prepare message
+            content = users[message.user_id]  + ' said "' + message.content.replace('"', '\'') + '." '
+            cluster_message += content
+        
+        # resolve coreferences
+        doc = nlp(cluster_message)
+
+        # dissolve cluster message
+        new_messages = [i[:-1] for i in doc._.coref_resolved.split('"') if not user_pattern.match(i)]
+        del new_messages[-1]
+
+        for (message, new_message) in zip(cluster, new_messages):
+            messages.append(Message(new_message, message.message_id, message.user_id, message.timestamp))
+    
+    return messages
+
 
 messages = get_messages(limit=100)
-print()
+messages = coref(create_clusters(messages))
 
-for _cluster in cluster(messages):
-    for message in _cluster:
-        print(message.content)
-    print()
+for message in messages:
+    print(message.content)
