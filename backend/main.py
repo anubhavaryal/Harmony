@@ -18,6 +18,18 @@ class Message:
         self.user_id = user_id
         self.timestamp = timestamp
         self.time = datetime.fromisoformat(timestamp)
+    
+    def __eq__(self, other):
+        return hasattr(other, 'message_id') and self.message_id == other.message_id
+
+    def __hash__(self):
+        return hash(self.message_id)
+
+    def __repr__(self):
+        return f"Message('{self.content}', '{self.message_id}', '{self.user_id}', '{self.timestamp}')"
+    
+    def __str__(self):
+        return self.__repr__();
 
 
 # load discord token from .env 
@@ -29,7 +41,7 @@ nlp = spacy.load('en_core_web_sm')
 neuralcoref.add_to_pipe(nlp, blacklist=False)
 
 # instantiate google client
-# client = language_v1.LanguageServiceClient()
+client = language_v1.LanguageServiceClient()
 type_ = language_v1.types.Document.Type.PLAIN_TEXT
 language = "en"
 encoding_type = language_v1.EncodingType.UTF8
@@ -39,12 +51,15 @@ users = {'240833127713472513': 'Donuts'}
 
 
 # returns json associated with request to discord api
-def send_request(url, headers={}):
-    request = requests.get(f"https://discord.com/api{url}", headers=headers)
+def send_request(url):
+    request = requests.get(f"https://discord.com/api{url}", headers={'Authorization': f'Bot {token}'})
 
     # if rate limited, wait "retry_after" seconds
     while request.status_code == 429:
+        print("Sleeping because of rate limit.")
         time.sleep(float(request.headers["retry-after"]) / 1000)
+        request = requests.get(f"https://discord.com/api{url}", headers={'Authorization': f'Bot {token}'})
+
     
     return request.json()
 
@@ -56,7 +71,7 @@ def get_user_by_id(user_id):
         return users[user_id]
     
     # find and cache user
-    data = send_request(f"/users/{user_id}", headers={'Authorization': f'Bot {token}'})
+    data = send_request(f"/users/{user_id}")
     users[user_id] = data['username']
 
     return data['username']
@@ -120,7 +135,7 @@ def get_messages(limit=5):
     last_msg = None
 
     while True:
-        data = send_request(f"/channels/979554513021177909/messages?limit=100&before={last_msg}" if last_msg else "/channels/979554513021177909/messages?limit=100", headers={'Authorization': f'Bot {token}'})
+        data = send_request(f"/channels/979554513021177909/messages?limit=100&before={last_msg}" if last_msg else "/channels/979554513021177909/messages?limit=100")
 
         # break out of loop once there are no more messages
         if not data:
@@ -186,7 +201,7 @@ def create_clusters(messages):
 
 
 # resolves coreferences in message clusters
-def coref(clusters):
+def resolve_coreferences(clusters):
     messages = []
 
     # pattern matches "username said "
@@ -211,11 +226,13 @@ def coref(clusters):
         for (message, new_message) in zip(cluster, new_messages):
             messages.append(Message(new_message, message.message_id, message.user_id, message.timestamp))
     
-    return messages
+    original_messages = [message for cluster in clusters for message in cluster]  # flatten cluster
+    return messages, original_messages
 
 
 # sentiment analysis on entities and messages
-def sentiment_analysis(messages):
+def analyze_sentiments(messages, original_messages):
+    print("DOING SENTIMENT ANALYSIS")
     # sentiment of this user referring to other users (sentiment of other users referring to this user can be derived from this dict)
     entity_sentiments = {}
 
@@ -231,10 +248,10 @@ def sentiment_analysis(messages):
         offset = mention.text.begin_offset
         dist = 2  # distance between two messages in the "content" string (each message is separated with 2 characters, ". ")
 
-        for message in messages:
+        for (message, original_message) in zip(messages, original_messages):
             # if the mention is contained within the current message, return it
             if len(message.content) > offset:
-                return message
+                return original_message
 
             # move to next message
             offset -= len(message.content) + dist
@@ -259,7 +276,7 @@ def sentiment_analysis(messages):
             sentence_message = find_message(sentence)
 
             # update message sentiments
-            message_sentiments[sentence_message.message_id] = (sentence.sentiment.score, sentence.sentiment.magnitude)
+            message_sentiments[sentence_message] = (sentence.sentiment.score, sentence.sentiment.magnitude)
         
         entity_response = client.analyze_entity_sentiment(request={'document': document, 'encoding_type': encoding_type})
         print()
@@ -276,10 +293,10 @@ def sentiment_analysis(messages):
                     entity_sentiments[users[entity_message.user_id]] = {}
                 
                 if entity.name not in entity_sentiments[users[entity_message.user_id]]:
-                    entity_sentiments[users[entity_message.user_id]][entity.name] = []
+                    entity_sentiments[users[entity_message.user_id]][entity.name] = {}
                 
                 # update entity sentiments
-                entity_sentiments[users[entity_message.user_id]][entity.name].append((mention.sentiment.score, mention.sentiment.magnitude))
+                entity_sentiments[users[entity_message.user_id]][entity.name][entity_message] = (mention.sentiment.score, mention.sentiment.magnitude)
 
 
     for message in messages:
@@ -310,26 +327,52 @@ def clean_entity_sentiments(entity_sentiments):
     return entity_sentiments
 
 
+# returns messages with the min/max sentiments for each user
+def polarized_sentiments(message_sentiments):
+    min_sentiments = {}
+    max_sentiments = {}
+
+    for message in message_sentiments:
+        this_sentiment = (message, message_sentiments[message][0], message_sentiments[message][1])
+        if not users[message.user_id] in min_sentiments:
+            # if min/max sentiments does not yet have a sentiment
+            min_sentiments[users[message.user_id]] = this_sentiment
+            max_sentiments[users[message.user_id]] = this_sentiment
+        else:
+            min_sentiment = min_sentiments[users[message.user_id]]
+            max_sentiment = max_sentiments[users[message.user_id]]
+
+            # update min/max sentiment for user
+            if min_sentiment[1] * min_sentiment[2] > this_sentiment[1] * this_sentiment[2]:
+                min_sentiments[users[message.user_id]] = this_sentiment
+            elif max_sentiment[1] * max_sentiment[2] < this_sentiment[1] * this_sentiment[2]:
+                max_sentiments[users[message.user_id]] = this_sentiment
+
+    return min_sentiments, max_sentiments
+
+
 if __name__ == "__main__":
-    messages = get_messages(limit=100)
-    messages = coref(create_clusters(messages))
-    # entity_sentiments, message_sentiments = sentiment(messages)
-    # entity_sentiments, message_sentiments = sentiment_analysis(messages)
+    # messages = get_messages(limit=100)
+    # messages, original_messages = resolve_coreferences(create_clusters(messages))
+    # entity_sentiments, message_sentiments = analyze_sentiments(messages, original_messages)
     entity_sentiments = {'Donuts': {'above': [(0.0, 0.0), (0.0, 0.0)], 'bot.': [(0.0, 0.0)], 'cluster.': [(0.0, 0.0)], 'Donuts Donuts': [(0.0, 0.0)], 'Donuts': [(0.20000000298023224, 0.20000000298023224), (0.0, 0.0), (0.0, 0.0), (-0.30000001192092896, 0.30000001192092896), (0.0, 0.0), (-0.10000000149011612, 0.10000000149011612), (0.0, 0.0)], 'bot': [(0.10000000149011612, 0.10000000149011612)], 'bot work': [(0.0, 0.0)], 'asdasdas': [(0.30000001192092896, 0.30000001192092896)], 'code': [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)], 'program': [(0.0, 0.0)], 'Donuts yo': [(0.10000000149011612, 0.10000000149011612)], 'marbles': [(-0.20000000298023224, 0.20000000298023224)], 'programs': [(0.0, 0.0), (0.10000000149011612, 0.10000000149011612)], 'work': [(0.0, 0.0)], 'asdasd asdasdasd': [(0.10000000149011612, 0.10000000149011612)], 'thats': [(0.0, 0.0)]}}
-    message_sentiments = {'979563889333268500': (0.6000000238418579, 0.6000000238418579), '979563897310838874': (0.0, 0.0), '979563906592821288': (-0.4000000059604645, 0.4000000059604645), '979563938301767761': (0.0, 0.0), '979564107281887303': (-0.30000001192092896, 0.30000001192092896), '979748640572706917': (0.0, 0.0), '979748887768203317': (-0.10000000149011612, 0.10000000149011612), '980998312289271808': (0.10000000149011612, 0.10000000149011612), 
-'981013220741488670': (-0.6000000238418579, 0.6000000238418579), '981013299523121172': (-0.10000000149011612, 0.10000000149011612), '981013314618417252': (-0.10000000149011612, 0.10000000149011612), '981013326286962698': (-0.30000001192092896, 0.30000001192092896), '981013337531875439': 
-(0.0, 0.0), '981013354841780244': (-0.6000000238418579, 0.6000000238418579), '981013361678508062': (0.0, 0.0), '981013367848337488': (0.0, 0.0), '981053190277591080': (-0.699999988079071, 0.699999988079071), '981086160606617630': (-0.20000000298023224, 0.20000000298023224), '981179196959232000': (0.10000000149011612, 0.10000000149011612)}
-    
-    print()
-    print("Entity Sentiments")
-    print(entity_sentiments)
+    message_sentiments = {Message('whats poppin', '979563889333268500', '240833127713472513', '2022-05-27T01:57:10.634000+00:00'): (0.6000000238418579, 0.6000000238418579), Message('i just got here', '979563897310838874', '240833127713472513', '2022-05-27T01:57:12.536000+00:00'): (0.0, 0.0), Message('testing out the bot', '979563906592821288', '240833127713472513', '2022-05-27T01:57:14.749000+00:00'): (-0.4000000059604645, 0.4000000059604645), Message('but its pretty mudh asdasdas', '979563938301767761', '240833127713472513', '2022-05-27T01:57:22.309000+00:00'): (0.0, 0.0), Message('does this bot work or not', '979564107281887303', '240833127713472513', '2022-05-27T01:58:02.597000+00:00'): (-0.30000001192092896, 0.30000001192092896), Message('Donuts yo whats up', '979748640572706917', '240833127713472513', '2022-05-27T14:11:18.762000+00:00'): (0.0, 0.0), Message('the above is a file', '979748887768203317', '240833127713472513', '2022-05-27T14:12:17.698000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('pog whats up', '980998312289271808', '240833127713472513', '2022-05-31T00:57:03.717000+00:00'): (0.10000000149011612, 0.10000000149011612), Message('yo Donuts this should be another cluster', '981013220741488670', '240833127713472513', '2022-05-31T01:56:18.169000+00:00'): (-0.6000000238418579, 0.6000000238418579), Message('back then', '981013299523121172', '240833127713472513', '2022-05-31T01:56:36.952000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('when the program was just made', '981013314618417252', '240833127713472513', '2022-05-31T01:56:40.551000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('cause thats how prgoirams work', '981013326286962698', '240833127713472513', '2022-05-31T01:56:43.333000+00:00'): (-0.30000001192092896, 0.30000001192092896), Message('programs work', '981013337531875439', '240833127713472513', '2022-05-31T01:56:46.014000+00:00'): (0.0, 0.0), Message('programs start with no code', '981013354841780244', '240833127713472513', '2022-05-31T01:56:50.141000+00:00'): (-0.6000000238418579, 0.6000000238418579), Message('then you write code', '981013361678508062', '240833127713472513', '2022-05-31T01:56:51.771000+00:00'): (0.0, 0.0), Message('then they have code', '981013367848337488', '240833127713472513', '2022-05-31T01:56:53.242000+00:00'): (0.0, 0.0), Message('i am going to lose my marbles', '981053190277591080', '240833127713472513', '2022-05-31T04:35:07.649000+00:00'): (-0.699999988079071, 0.699999988079071), Message('i said i was gonna', '981086160606617630', '240833127713472513', '2022-05-31T06:46:08.388000+00:00'): (-0.20000000298023224, 0.20000000298023224), Message('asdasd asdasdasd a', '981179196959232000', '240833127713472513', '2022-05-31T12:55:49.983000+00:00'): (0.10000000149011612, 0.10000000149011612)}
+    # print()
+    # print("Entity Sentiments")
+    # print(entity_sentiments)
 
-    entity_sentiments = clean_entity_sentiments(entity_sentiments)
+    # entity_sentiments = clean_entity_sentiments(entity_sentiments)
 
-    print()
-    print("Entity Sentiments")
-    print(entity_sentiments)
+    # print()
+    # print("Entity Sentiments")
+    # print(entity_sentiments)
 
     # print()
     # print("Message Sentiments")
     # print(message_sentiments)
+
+    min_sentiments, max_sentiments = polarized_sentiments(message_sentiments)
+    print("Most Negative Sentiment", min_sentiments)
+    print()
+    print("Most Positive Sentiment", max_sentiments)
+    # print(Message('hello', '123', '123', '2022-05-31T14:21:44.956522'))
