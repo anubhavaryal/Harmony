@@ -29,13 +29,13 @@ nlp = spacy.load('en_core_web_sm')
 neuralcoref.add_to_pipe(nlp, blacklist=False)
 
 # instantiate google client
-client = language_v1.LanguageServiceClient()
+# client = language_v1.LanguageServiceClient()
 type_ = language_v1.types.Document.Type.PLAIN_TEXT
 language = "en"
 encoding_type = language_v1.EncodingType.UTF8
 
-# cache users
-users = {}
+# dict of users for their respective user_id's
+users = {'240833127713472513': 'Donuts'}
 
 
 # returns json associated with request to discord api
@@ -49,11 +49,8 @@ def send_request(url, headers={}):
     return request.json()
 
 
-# finds and returns user using the matched mention
-def get_user_from_mention(match):
-    # get user id from mention
-    user_id = match.group(1)
-
+# find and returns user with the given id
+def get_user_by_id(user_id):
     # if the user has been cached
     if user_id in users:
         return users[user_id]
@@ -63,7 +60,7 @@ def get_user_from_mention(match):
     users[user_id] = data['username']
 
     return data['username']
-
+    
 
 # prepares Discord message object for analysis
 def prepare_message(message):
@@ -76,6 +73,14 @@ def prepare_message(message):
     mention_regex = r"<@!?(\d+)>"  # regex to find mentions in messages
     code_regex = r"```.+\n.*\n```"  # regex to find code blocks
     special_chars_regex = r"[^A-Za-z0-9\'\" ]+"  # regex to find special characters (not alphanumeric, quotes, or space)
+
+    # finds and returns user using the matched mention
+    def get_user_from_mention(match):
+        # get user id from mention
+        user_id = match.group(1)
+
+        return get_user_by_id(user_id)
+
 
     # ensure message type is 0 (DEFAULT)
     if message['type'] != 0:
@@ -92,7 +97,7 @@ def prepare_message(message):
     # ignore messages with links
     if len(re.findall(link_regex, message['content'])) != 0:
         return
-    
+
     # replace mentions with respective user
     message['content'] = re.sub(mention_regex, get_user_from_mention, message['content'])
 
@@ -125,6 +130,9 @@ def get_messages(limit=5):
             # prepare message for analysis
             message = prepare_message(message)
             if message is not None:
+                # add user to users dict
+                get_user_by_id(message['author']['id'])
+
                 messages.append(Message(message['content'], message['id'], message['author']['id'], message['timestamp']))
 
             # stop once message limit has been reached
@@ -264,14 +272,14 @@ def sentiment_analysis(messages):
                 entity_message = find_message(mention)
 
                 # initialize dict value if it doesnt yet exist
-                if entity_message.user_id not in entity_sentiments:
-                    entity_sentiments[entity_message.user_id] = {}
+                if users[entity_message.user_id] not in entity_sentiments:
+                    entity_sentiments[users[entity_message.user_id]] = {}
                 
-                if entity.name not in entity_sentiments[entity_message.user_id]:
-                    entity_sentiments[entity_message.user_id][entity.name] = []
+                if entity.name not in entity_sentiments[users[entity_message.user_id]]:
+                    entity_sentiments[users[entity_message.user_id]][entity.name] = []
                 
                 # update entity sentiments
-                entity_sentiments[entity_message.user_id][entity.name].append((mention.sentiment.score, mention.sentiment.magnitude))
+                entity_sentiments[users[entity_message.user_id]][entity.name].append((mention.sentiment.score, mention.sentiment.magnitude))
 
 
     for message in messages:
@@ -291,15 +299,37 @@ def sentiment_analysis(messages):
     return entity_sentiments, message_sentiments
 
 
+# removes all entity sentiments that refer to non-user entities
+def clean_entity_sentiments(entity_sentiments):
+    for this_entity in entity_sentiments:
+        # remove all non-user entities
+        for other_entity in list(entity_sentiments[this_entity]):
+            if other_entity not in users.values():
+                del entity_sentiments[this_entity][other_entity]
+    
+    return entity_sentiments
+
+
 if __name__ == "__main__":
     messages = get_messages(limit=100)
     messages = coref(create_clusters(messages))
     # entity_sentiments, message_sentiments = sentiment(messages)
-    entity_sentiments, message_sentiments = sentiment_analysis(messages)
+    # entity_sentiments, message_sentiments = sentiment_analysis(messages)
+    entity_sentiments = {'Donuts': {'above': [(0.0, 0.0), (0.0, 0.0)], 'bot.': [(0.0, 0.0)], 'cluster.': [(0.0, 0.0)], 'Donuts Donuts': [(0.0, 0.0)], 'Donuts': [(0.20000000298023224, 0.20000000298023224), (0.0, 0.0), (0.0, 0.0), (-0.30000001192092896, 0.30000001192092896), (0.0, 0.0), (-0.10000000149011612, 0.10000000149011612), (0.0, 0.0)], 'bot': [(0.10000000149011612, 0.10000000149011612)], 'bot work': [(0.0, 0.0)], 'asdasdas': [(0.30000001192092896, 0.30000001192092896)], 'code': [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)], 'program': [(0.0, 0.0)], 'Donuts yo': [(0.10000000149011612, 0.10000000149011612)], 'marbles': [(-0.20000000298023224, 0.20000000298023224)], 'programs': [(0.0, 0.0), (0.10000000149011612, 0.10000000149011612)], 'work': [(0.0, 0.0)], 'asdasd asdasdasd': [(0.10000000149011612, 0.10000000149011612)], 'thats': [(0.0, 0.0)]}}
+    message_sentiments = {'979563889333268500': (0.6000000238418579, 0.6000000238418579), '979563897310838874': (0.0, 0.0), '979563906592821288': (-0.4000000059604645, 0.4000000059604645), '979563938301767761': (0.0, 0.0), '979564107281887303': (-0.30000001192092896, 0.30000001192092896), '979748640572706917': (0.0, 0.0), '979748887768203317': (-0.10000000149011612, 0.10000000149011612), '980998312289271808': (0.10000000149011612, 0.10000000149011612), 
+'981013220741488670': (-0.6000000238418579, 0.6000000238418579), '981013299523121172': (-0.10000000149011612, 0.10000000149011612), '981013314618417252': (-0.10000000149011612, 0.10000000149011612), '981013326286962698': (-0.30000001192092896, 0.30000001192092896), '981013337531875439': 
+(0.0, 0.0), '981013354841780244': (-0.6000000238418579, 0.6000000238418579), '981013361678508062': (0.0, 0.0), '981013367848337488': (0.0, 0.0), '981053190277591080': (-0.699999988079071, 0.699999988079071), '981086160606617630': (-0.20000000298023224, 0.20000000298023224), '981179196959232000': (0.10000000149011612, 0.10000000149011612)}
+    
     print()
     print("Entity Sentiments")
     print(entity_sentiments)
 
+    entity_sentiments = clean_entity_sentiments(entity_sentiments)
+
     print()
-    print("Message Sentiments")
-    print(message_sentiments)
+    print("Entity Sentiments")
+    print(entity_sentiments)
+
+    # print()
+    # print("Message Sentiments")
+    # print(message_sentiments)
