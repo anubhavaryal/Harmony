@@ -107,7 +107,7 @@ def prepare_message(message):
     # ensure message length is within min/max
     if len(message['content']) < min_size or len(message['content']) > max_size:
         return
-    
+
     return message
 
 
@@ -135,6 +135,9 @@ def get_messages(limit=5):
         
         # update id of last message
         last_msg = data[-1]['id']
+    
+    # reverse ordering of messages (oldest messages at start of list and newest messages at end of list)
+    messages.reverse()
     
     return messages
 
