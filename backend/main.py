@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from markdown import Markdown
 from io import StringIO
 
+# TODO: add a message size minimum and maximum for get_messages()
+# TODO: remove spoiler and code block markdown from messages
 
 # patch markdown (code snippet from https://stackoverflow.com/a/54923798)
 def unmark_element(element, stream=None):
@@ -207,9 +209,27 @@ def coref(clusters):
     
     return messages
 
+# sentiment analysis on entities
+def sentiment(messages):
+    # create groups of messages to send through api (1000 characters = 1 unit)
+    content = ""
 
-messages = get_messages(limit=100)
-messages = coref(create_clusters(messages))
+    for message in messages:
+        # prepare message by removing dots
+        clean_message = message.content.translate({ord(c): None for c in '.'})
 
-for message in messages:
-    print(message.content)
+        # add message to current group if character limit not reached
+        if len(clean_message) + len(content) < 1000:
+            content += clean_message + ". "
+
+    return content
+
+
+if __name__ == "__main__":
+    messages = get_messages(limit=100)
+    print(len(messages))
+    messages = coref(create_clusters(messages))
+    messages = sentiment(messages)
+
+    print(messages)
+    print(len(messages))
