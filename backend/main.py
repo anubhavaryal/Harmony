@@ -5,6 +5,16 @@ import neuralcoref
 import requests
 import time
 import re
+from datetime import datetime, timedelta
+
+# class to store each discord message
+class Message:
+    def __init__(self, content, message_id, user_id, timestamp):
+        self.content = content
+        self.message_id = message_id
+        self.user_id = user_id
+        self.time = datetime.fromisoformat(timestamp)
+
 
 load_dotenv()
 
@@ -50,7 +60,7 @@ def get_messages(limit=5):
                 continue
 
             print(message['content'])
-            messages.append(message)
+            messages.append(Message(message['content'], message['id'], message['author']['id'], message['timestamp']))
 
             # stop once message limit has been reached
             if len(messages) >= limit:
@@ -61,17 +71,47 @@ def get_messages(limit=5):
     
     return messages
 
-# creates clusters of messages based on channel and time frame to prepare for coref
+# creates clusters of messages based on time frame to prepare for coref
 def cluster(messages):
     # max amount of time between start message and last message in the cluster
-    max_dist = 5
+    max_dist = timedelta(minutes=5)
 
     # max amount of time between consecutive messages in the cluster
-    dist = 1
+    dist = timedelta(minutes=1)
+
+    # stores all message clusters
+    clusters = []
+
+    # stores current cluster
+    cluster = []
+    
+    for message in messages:
+        if len(cluster) == 0:
+            # add message to cluster if it is empty
+            cluster.append(message)
+        else:
+            # find time difference between message and first/last cluster messages
+            first_delta = cluster[0].time - message.time
+            last_delta = cluster[-1].time - message.time
+
+            # if time difference too large/surpasses max dist, create new cluster
+            if last_delta > dist or first_delta > max_dist:
+                clusters.append(cluster)
+                cluster = []
+            
+            cluster.append(message)
+    
+    # add last cluster
+    if len(cluster) != 0:
+        clusters.append(cluster)
+
+    return clusters
+
 
 # possibly prepend each message with "user said" and append each message with "i you he she" to help coreference?
 def coref():
     pass
 
-messages = get_messages()
-print(messages[0])
+messages = get_messages(limit=100)
+print()
+print(len(cluster(messages)))
