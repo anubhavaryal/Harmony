@@ -135,7 +135,7 @@ def get_messages(limit=5):
     last_msg = None
 
     while True:
-        data = send_request(f"/channels/979554513021177909/messages?limit=100&before={last_msg}" if last_msg else "/channels/979554513021177909/messages?limit=100")
+        data = send_request(f"/channels/979554513021177909/messages?limit=100{f'&before={last_msg}' if last_msg else ''}")
 
         # break out of loop once there are no more messages
         if not data:
@@ -368,6 +368,18 @@ def average_sentiment(user_sentiments):
     return avg_score, avg_magnitude
 
 
+# inverses the dict so that it shows how the child refers to the parent (instead of showing how parent refers to child)
+def invert_entity_sentiment(entity_sentiment):
+    inverse = {}
+    for entity in entity_sentiment:
+        for other_entity in entity_sentiment[entity]:
+            if other_entity not in inverse:
+                inverse[other_entity] = {}
+            inverse[other_entity][entity] = {**inverse.get(other_entity, {}), **entity_sentiment[entity][other_entity]}
+    
+    return inverse
+   
+
 if __name__ == "__main__":
     # messages = get_messages(limit=100)
     # messages, original_messages = resolve_coreferences(create_clusters(messages))
@@ -386,8 +398,13 @@ if __name__ == "__main__":
     # print("Message Sentiments")
     # print(message_sentiments)
 
-    avg_score, avg_magnitude = average_sentiment(entity_sentiments['Donuts']['Donuts'])
-    print(avg_score, avg_magnitude)
+    # avg_score, avg_magnitude = average_sentiment(entity_sentiments['Donuts']['Donuts'])
+    # print(avg_score, avg_magnitude)
+
+    print(entity_sentiments)
+    print()
+    print()
+    print(invert_entity_sentiment(entity_sentiments))
 
     # min_sentiments, max_sentiments = polarized_sentiments(entity_sentiments['Donuts']['Donuts'])
     # print("Most Negative Sentiment", min_sentiments)
