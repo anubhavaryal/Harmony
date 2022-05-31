@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from markdown import Markdown
 from io import StringIO
 
-# TODO: add a message size minimum and maximum for get_messages()
 # TODO: remove spoiler and code block markdown from messages
 
 # patch markdown (code snippet from https://stackoverflow.com/a/54923798)
@@ -101,6 +100,10 @@ def get_messages(limit=5):
     # regex to find mentions in messages
     mention_regex = r"<@!?(\d+)>"
 
+    # min and max size of messages
+    min_size = 8
+    max_size = 50
+
     messages = []
     last_msg = None
 
@@ -129,6 +132,10 @@ def get_messages(limit=5):
 
             # replace mentions with respective user
             msg = re.sub(mention_regex, get_user_from_mention, msg)
+
+            # make sure message is within min/max
+            if len(msg) < min_size or len(message) > max_size:
+                continue
 
             messages.append(Message(msg, message['id'], message['author']['id'], message['timestamp']))
 
