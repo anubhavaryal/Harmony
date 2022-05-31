@@ -6,6 +6,32 @@ import requests
 import time
 import re
 from datetime import datetime, timedelta
+from markdown import Markdown
+from io import StringIO
+
+
+# patch markdown (code snippet from https://stackoverflow.com/a/54923798)
+def unmark_element(element, stream=None):
+    if stream is None:
+        stream = StringIO()
+    if element.text:
+        stream.write(element.text)
+    for sub in element:
+        unmark_element(sub, stream)
+    if element.tail:
+        stream.write(element.tail)
+    return stream.getvalue()
+
+
+Markdown.output_formats["plain"] = unmark_element
+__md = Markdown(output_format="plain")
+__md.stripTopLevelTags = False
+
+
+# remove markdown from text
+def unmark(text):
+    return __md.convert(text)
+
 
 # class to store each discord message
 class Message:
@@ -16,10 +42,8 @@ class Message:
         self.time = datetime.fromisoformat(timestamp)
 
 
-load_dotenv()
-
-
 # load discord token from .env 
+load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
 
 # average sentiment of other users with referring to this user
@@ -33,6 +57,9 @@ min_sentiments = {'Donuts': 28713941234, 'mossy': 71928347891234, 'Knuck': 18029
 
 # returns all messages in the channel
 def get_messages(limit=5):
+    # regex to find links in messages (https://daringfireball.net/2010/07/improved_regex_for_matching_urls)
+    link_regex = r"(?i)\b((?:[a-z][\w-]+:(?:/{1,3}|[a-z0-9%])|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'\".,<>?«»“”‘’]))"
+    
     messages = []
     last_msg = None
 
@@ -51,16 +78,23 @@ def get_messages(limit=5):
             break
         
         for message in data:
-            # make sure there are no attachments
-            if message['attachments']:
-                continue
-
             # make sure message type is 0 (DEFAULT)
             if message['type'] != 0:
                 continue
 
+            # make sure there are no attachments
+            if message['attachments']:
+                continue
+
+            # remove markdown from content
+            unmarked_msg = unmark(message['content'])
+
+            # make sure there are no links
+            if len(re.findall(link_regex, unmarked_msg)) != 0:
+                continue
+
             print(message['content'])
-            messages.append(Message(message['content'], message['id'], message['author']['id'], message['timestamp']))
+            messages.append(Message(unmarked_msg, message['id'], message['author']['id'], message['timestamp']))
 
             # stop once message limit has been reached
             if len(messages) >= limit:
@@ -114,4 +148,8 @@ def coref():
 
 messages = get_messages(limit=100)
 print()
-print(len(cluster(messages)))
+
+for _cluster in cluster(messages):
+    for message in _cluster:
+        print(message.content)
+    print()
