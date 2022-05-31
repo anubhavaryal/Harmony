@@ -6,6 +6,7 @@ import requests
 import time
 import re
 from datetime import datetime, timedelta
+from google.cloud import language_v1
 
 # TODO: handle messages with emojis
 
@@ -27,14 +28,11 @@ token = os.getenv("DISCORD_TOKEN")
 nlp = spacy.load('en_core_web_sm')
 neuralcoref.add_to_pipe(nlp, blacklist=False)
 
-# average sentiment of other users with referring to this user
-sentiments = {'Donuts': {'mossy': 0.7, 'Knuck': 0.5}, 'mossy': {'Donuts': 0.3, 'Knuck': 0.6}, 'Knuck': {'Donuts': -0.9, 'mossy': 0.5}}
-
-# each user and the message id of the message with the most sentiment
-max_sentiments = {'Donuts': 1792387123, 'mossy': 123871923, 'Knuck': 12731023}
-
-# each user and the message id of the message with the least sentiment
-min_sentiments = {'Donuts': 28713941234, 'mossy': 71928347891234, 'Knuck': 18029348912}
+# instantiate google client
+client = language_v1.LanguageServiceClient()
+type_ = language_v1.types.Document.Type.PLAIN_TEXT
+language = "en"
+encoding_type = language_v1.EncodingType.UTF8
 
 # cache users
 users = {}
@@ -208,24 +206,100 @@ def coref(clusters):
     return messages
 
 
-# sentiment analysis on entities
-def sentiment(messages):
+# sentiment analysis on entities and messages
+def sentiment_analysis(messages):
+    # sentiment of this user referring to other users (sentiment of other users referring to this user can be derived from this dict)
+    entity_sentiments = {}
+
+    # sentiment of each message (user min/max sentiments can be derived from this dict)
+    message_sentiments = {}
+
     # create groups of messages to send through api (1000 characters = 1 unit)
     content = ""
 
-    for message in messages:
-        # add message to current group if character limit not reached
-        if len(message.content) + len(content) < 1000:
-            content += message.content + ". "
 
-    return content.strip()
+    # finds the message containing the given mention
+    def find_message(mention):
+        offset = mention.text.begin_offset
+        dist = 2  # distance between two messages in the "content" string (each message is separated with 2 characters, ". ")
+
+        for message in messages:
+            # if the mention is contained within the current message, return it
+            if len(message.content) > offset:
+                return message
+
+            # move to next message
+            offset -= len(message.content) + dist
+    
+
+    # computes entity and message sentiments for content
+    def compute_sentiments(content):
+        # ensure that content is contained in a single unit (< 1000 characters)
+        assert len(content) < 1000
+
+        # create document
+        document = {'content': content, 'type_': type_, 'language': language}
+        print(document)
+
+        sentiment_response = client.analyze_sentiment(request={'document': document, 'encoding_type': encoding_type})
+        print()
+        print(sentiment_response)
+        print()
+
+        for sentence in sentiment_response.sentences:
+            # find message using span of sentence
+            sentence_message = find_message(sentence)
+
+            # update message sentiments
+            message_sentiments[sentence_message.message_id] = (sentence.sentiment.score, sentence.sentiment.magnitude)
+        
+        entity_response = client.analyze_entity_sentiment(request={'document': document, 'encoding_type': encoding_type})
+        print()
+        print(entity_response)
+        print()
+
+        for entity in entity_response.entities:
+            # find message using span of entity
+            for mention in entity.mentions:
+                entity_message = find_message(mention)
+
+                # initialize dict value if it doesnt yet exist
+                if entity_message.user_id not in entity_sentiments:
+                    entity_sentiments[entity_message.user_id] = {}
+                
+                if entity.name not in entity_sentiments[entity_message.user_id]:
+                    entity_sentiments[entity_message.user_id][entity.name] = []
+                
+                # update entity sentiments
+                entity_sentiments[entity_message.user_id][entity.name].append((mention.sentiment.score, mention.sentiment.magnitude))
+
+
+    for message in messages:
+        if len(message.content) + len(content) < 1000:
+            # add message to current group if character limit not reached
+            content += message.content + ". "
+        else:
+            # compute unit of messages
+            compute_sentiments(content)
+            content = ""
+    
+    # compute last unit of messages
+    if len(content) > 0:
+        compute_sentiments(content)
+        content = ""
+    
+    return entity_sentiments, message_sentiments
 
 
 if __name__ == "__main__":
     messages = get_messages(limit=100)
-    print(len(messages))
     messages = coref(create_clusters(messages))
-    messages = sentiment(messages)
+    # entity_sentiments, message_sentiments = sentiment(messages)
+    entity_sentiments, message_sentiments = sentiment_analysis(messages)
+    print()
+    print("Entity Sentiments")
+    print(entity_sentiments)
 
-    print(messages)
-    print(len(messages))
+    print()
+    print("Message Sentiments")
+    print(message_sentiments)
