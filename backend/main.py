@@ -6,33 +6,8 @@ import requests
 import time
 import re
 from datetime import datetime, timedelta
-from markdown import Markdown
-from io import StringIO
 
-# TODO: remove spoiler and code block markdown from messages
-
-# patch markdown (code snippet from https://stackoverflow.com/a/54923798)
-def unmark_element(element, stream=None):
-    if stream is None:
-        stream = StringIO()
-    if element.text:
-        stream.write(element.text)
-    for sub in element:
-        unmark_element(sub, stream)
-    if element.tail:
-        stream.write(element.tail)
-    return stream.getvalue()
-
-
-Markdown.output_formats["plain"] = unmark_element
-__md = Markdown(output_format="plain")
-__md.stripTopLevelTags = False
-
-
-# remove markdown from text
-def unmark(text):
-    return __md.convert(text)
-
+# TODO: handle messages with emojis
 
 # class to store each discord message
 class Message:
@@ -91,19 +66,53 @@ def get_user_from_mention(match):
 
     return data['username']
 
-    
-# returns all messages in the channel
-def get_messages(limit=5):
-    # regex to find links in messages (https://daringfireball.net/2010/07/improved_regex_for_matching_urls)
-    link_regex = r"(?i)\b((?:[a-z][\w-]+:(?:/{1,3}|[a-z0-9%])|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'\".,<>?«»“”‘’]))"
-    
-    # regex to find mentions in messages
-    mention_regex = r"<@!?(\d+)>"
 
-    # min and max size of messages
+# prepares Discord message object for analysis
+def prepare_message(message):
+    # min and max length of messages
     min_size = 8
     max_size = 50
 
+    # regex to find links in messages (https://daringfireball.net/2010/07/improved_regex_for_matching_urls)
+    link_regex = r"(?i)\b((?:[a-z][\w-]+:(?:/{1,3}|[a-z0-9%])|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'\".,<>?«»“”‘’]))"
+    mention_regex = r"<@!?(\d+)>"  # regex to find mentions in messages
+    code_regex = r"```.+\n.*\n```"  # regex to find code blocks
+    special_chars_regex = r"[^A-Za-z0-9\'\" ]+"  # regex to find special characters (not alphanumeric, quotes, or space)
+
+    # ensure message type is 0 (DEFAULT)
+    if message['type'] != 0:
+        return
+    
+    # ensure there are no attachments
+    if message['attachments']:
+        return
+
+    # ignore messages with code blocks
+    if len(re.findall(code_regex, message['content'])) != 0:
+        return
+
+    # ignore messages with links
+    if len(re.findall(link_regex, message['content'])) != 0:
+        return
+    
+    # replace mentions with respective user
+    message['content'] = re.sub(mention_regex, get_user_from_mention, message['content'])
+
+    # remove special characters
+    message['content'] = re.sub(special_chars_regex, '', message['content'])
+
+    # at most one space between words
+    message['content'] = ' '.join(message['content'].split())
+
+    # ensure message length is within min/max
+    if len(message['content']) < min_size or len(message['content']) > max_size:
+        return
+    
+    return message
+
+
+# returns all messages in the channel
+def get_messages(limit=5):
     messages = []
     last_msg = None
 
@@ -115,29 +124,10 @@ def get_messages(limit=5):
             break
         
         for message in data:
-            # make sure message type is 0 (DEFAULT)
-            if message['type'] != 0:
-                continue
-
-            # make sure there are no attachments
-            if message['attachments']:
-                continue
-
-            # remove markdown from content
-            msg = unmark(message['content'])
-
-            # make sure there are no links
-            if len(re.findall(link_regex, msg)) != 0:
-                continue
-
-            # replace mentions with respective user
-            msg = re.sub(mention_regex, get_user_from_mention, msg)
-
-            # make sure message is within min/max
-            if len(msg) < min_size or len(message) > max_size:
-                continue
-
-            messages.append(Message(msg, message['id'], message['author']['id'], message['timestamp']))
+            # prepare message for analysis
+            message = prepare_message(message)
+            if message is not None:
+                messages.append(Message(message['content'], message['id'], message['author']['id'], message['timestamp']))
 
             # stop once message limit has been reached
             if len(messages) >= limit:
@@ -216,20 +206,18 @@ def coref(clusters):
     
     return messages
 
+
 # sentiment analysis on entities
 def sentiment(messages):
     # create groups of messages to send through api (1000 characters = 1 unit)
     content = ""
 
     for message in messages:
-        # prepare message by removing dots
-        clean_message = message.content.translate({ord(c): None for c in '.'})
-
         # add message to current group if character limit not reached
-        if len(clean_message) + len(content) < 1000:
-            content += clean_message + ". "
+        if len(message) + len(content) < 1000:
+            content += message + ". "
 
-    return content
+    return content.strip()
 
 
 if __name__ == "__main__":
