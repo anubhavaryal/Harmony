@@ -55,23 +55,51 @@ max_sentiments = {'Donuts': 1792387123, 'mossy': 123871923, 'Knuck': 12731023}
 # each user and the message id of the message with the least sentiment
 min_sentiments = {'Donuts': 28713941234, 'mossy': 71928347891234, 'Knuck': 18029348912}
 
+# cache users
+users = {}
+
+
+# returns json associated with request to discord api
+def send_request(url, headers={}):
+    request = requests.get(f"https://discord.com/api{url}", headers=headers)
+
+    # if rate limited, wait "retry_after" seconds
+    while request.status_code == 429:
+        time.sleep(float(request.headers["retry-after"]) / 1000)
+    
+    return request.json()
+
+
+# finds and returns user using the matched mention
+def get_user_from_mention(match):
+    # get user id from mention
+    user_id = match.group(1)
+
+    # if the user has been cached
+    if user_id in users:
+        return users[user_id]
+    
+    # find and cache user
+    data = send_request(f"/users/{user_id}", headers={'Authorization': f'Bot {token}'})
+    users[user_id] = data['username']
+
+    return data['username']
+
+    
+
 # returns all messages in the channel
 def get_messages(limit=5):
     # regex to find links in messages (https://daringfireball.net/2010/07/improved_regex_for_matching_urls)
     link_regex = r"(?i)\b((?:[a-z][\w-]+:(?:/{1,3}|[a-z0-9%])|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'\".,<>?«»“”‘’]))"
     
+    # regex to find mentions in messages
+    mention_regex = r"<@!?(\d+)>"
+
     messages = []
     last_msg = None
 
     while True:
-        request = requests.get(f"https://discord.com/api/channels/979554513021177909/messages?limit=100&before={last_msg}" if last_msg else "https://discord.com/api/channels/979554513021177909/messages?limit=100", headers={'Authorization': f'Bot {token}'})
-
-        # if rate limited, wait "retry_after" seconds
-        if request.status_code == 429:
-            time.sleep(float(request.headers["retry-after"]) / 1000)
-            continue
-        
-        data = request.json()
+        data = send_request(f"/channels/979554513021177909/messages?limit=100&before={last_msg}" if last_msg else "/channels/979554513021177909/messages?limit=100", headers={'Authorization': f'Bot {token}'})
 
         # break out of loop once there are no more messages
         if not data:
@@ -87,14 +115,16 @@ def get_messages(limit=5):
                 continue
 
             # remove markdown from content
-            unmarked_msg = unmark(message['content'])
+            msg = unmark(message['content'])
 
             # make sure there are no links
-            if len(re.findall(link_regex, unmarked_msg)) != 0:
+            if len(re.findall(link_regex, msg)) != 0:
                 continue
 
-            print(message['content'])
-            messages.append(Message(unmarked_msg, message['id'], message['author']['id'], message['timestamp']))
+            # replace mentions with respective user
+            msg = re.sub(mention_regex, get_user_from_mention, msg)
+
+            messages.append(Message(msg, message['id'], message['author']['id'], message['timestamp']))
 
             # stop once message limit has been reached
             if len(messages) >= limit:
