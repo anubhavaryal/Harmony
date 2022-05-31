@@ -275,8 +275,12 @@ def analyze_sentiments(messages, original_messages):
             # find message using span of sentence
             sentence_message = find_message(sentence)
 
+            # initialize dict value if it doesnt yet exist
+            if users[sentence_message.user_id] not in message_sentiments:
+                message_sentiments[users[sentence_message.user_id]] = {}
+
             # update message sentiments
-            message_sentiments[sentence_message] = (sentence.sentiment.score, sentence.sentiment.magnitude)
+            message_sentiments[users[sentence_message.user_id]][sentence_message] = (sentence.sentiment.score, sentence.sentiment.magnitude)
         
         entity_response = client.analyze_entity_sentiment(request={'document': document, 'encoding_type': encoding_type})
         print()
@@ -327,36 +331,35 @@ def clean_entity_sentiments(entity_sentiments):
     return entity_sentiments
 
 
-# returns messages with the min/max sentiments for each user
-def polarized_sentiments(message_sentiments):
-    min_sentiments = {}
-    max_sentiments = {}
+# returns messages with the min/max sentiment
+def polarized_sentiments(user_message_sentiments):
+    min_sentiment = None
+    max_sentiment = None
 
-    for message in message_sentiments:
-        this_sentiment = (message, message_sentiments[message][0], message_sentiments[message][1])
-        if not users[message.user_id] in min_sentiments:
-            # if min/max sentiments does not yet have a sentiment
-            min_sentiments[users[message.user_id]] = this_sentiment
-            max_sentiments[users[message.user_id]] = this_sentiment
+    for message in user_message_sentiments:
+        sentiment = (message, *user_message_sentiments[message])
+        
+        # if min/max sentiments do not yet have a value
+        if min_sentiment is None:
+            min_sentiment = sentiment
+            max_sentiment = sentiment
         else:
-            min_sentiment = min_sentiments[users[message.user_id]]
-            max_sentiment = max_sentiments[users[message.user_id]]
-
-            # update min/max sentiment for user
-            if min_sentiment[1] * min_sentiment[2] > this_sentiment[1] * this_sentiment[2]:
-                min_sentiments[users[message.user_id]] = this_sentiment
-            elif max_sentiment[1] * max_sentiment[2] < this_sentiment[1] * this_sentiment[2]:
-                max_sentiments[users[message.user_id]] = this_sentiment
-
-    return min_sentiments, max_sentiments
+            # update min/max sentiments
+            if min_sentiment[1] * min_sentiment[2] > sentiment[1] * sentiment[2]:
+                min_sentiment = sentiment
+            elif max_sentiment[1] * max_sentiment[2] < sentiment[1] * sentiment[2]:
+                max_sentiment = sentiment
+    
+    return min_sentiment, max_sentiment
 
 
 if __name__ == "__main__":
     # messages = get_messages(limit=100)
     # messages, original_messages = resolve_coreferences(create_clusters(messages))
     # entity_sentiments, message_sentiments = analyze_sentiments(messages, original_messages)
-    entity_sentiments = {'Donuts': {'above': [(0.0, 0.0), (0.0, 0.0)], 'bot.': [(0.0, 0.0)], 'cluster.': [(0.0, 0.0)], 'Donuts Donuts': [(0.0, 0.0)], 'Donuts': [(0.20000000298023224, 0.20000000298023224), (0.0, 0.0), (0.0, 0.0), (-0.30000001192092896, 0.30000001192092896), (0.0, 0.0), (-0.10000000149011612, 0.10000000149011612), (0.0, 0.0)], 'bot': [(0.10000000149011612, 0.10000000149011612)], 'bot work': [(0.0, 0.0)], 'asdasdas': [(0.30000001192092896, 0.30000001192092896)], 'code': [(0.0, 0.0), (0.0, 0.0), (0.0, 0.0), (0.0, 0.0)], 'program': [(0.0, 0.0)], 'Donuts yo': [(0.10000000149011612, 0.10000000149011612)], 'marbles': [(-0.20000000298023224, 0.20000000298023224)], 'programs': [(0.0, 0.0), (0.10000000149011612, 0.10000000149011612)], 'work': [(0.0, 0.0)], 'asdasd asdasdasd': [(0.10000000149011612, 0.10000000149011612)], 'thats': [(0.0, 0.0)]}}
-    message_sentiments = {Message('whats poppin', '979563889333268500', '240833127713472513', '2022-05-27T01:57:10.634000+00:00'): (0.6000000238418579, 0.6000000238418579), Message('i just got here', '979563897310838874', '240833127713472513', '2022-05-27T01:57:12.536000+00:00'): (0.0, 0.0), Message('testing out the bot', '979563906592821288', '240833127713472513', '2022-05-27T01:57:14.749000+00:00'): (-0.4000000059604645, 0.4000000059604645), Message('but its pretty mudh asdasdas', '979563938301767761', '240833127713472513', '2022-05-27T01:57:22.309000+00:00'): (0.0, 0.0), Message('does this bot work or not', '979564107281887303', '240833127713472513', '2022-05-27T01:58:02.597000+00:00'): (-0.30000001192092896, 0.30000001192092896), Message('Donuts yo whats up', '979748640572706917', '240833127713472513', '2022-05-27T14:11:18.762000+00:00'): (0.0, 0.0), Message('the above is a file', '979748887768203317', '240833127713472513', '2022-05-27T14:12:17.698000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('pog whats up', '980998312289271808', '240833127713472513', '2022-05-31T00:57:03.717000+00:00'): (0.10000000149011612, 0.10000000149011612), Message('yo Donuts this should be another cluster', '981013220741488670', '240833127713472513', '2022-05-31T01:56:18.169000+00:00'): (-0.6000000238418579, 0.6000000238418579), Message('back then', '981013299523121172', '240833127713472513', '2022-05-31T01:56:36.952000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('when the program was just made', '981013314618417252', '240833127713472513', '2022-05-31T01:56:40.551000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('cause thats how prgoirams work', '981013326286962698', '240833127713472513', '2022-05-31T01:56:43.333000+00:00'): (-0.30000001192092896, 0.30000001192092896), Message('programs work', '981013337531875439', '240833127713472513', '2022-05-31T01:56:46.014000+00:00'): (0.0, 0.0), Message('programs start with no code', '981013354841780244', '240833127713472513', '2022-05-31T01:56:50.141000+00:00'): (-0.6000000238418579, 0.6000000238418579), Message('then you write code', '981013361678508062', '240833127713472513', '2022-05-31T01:56:51.771000+00:00'): (0.0, 0.0), Message('then they have code', '981013367848337488', '240833127713472513', '2022-05-31T01:56:53.242000+00:00'): (0.0, 0.0), Message('i am going to lose my marbles', '981053190277591080', '240833127713472513', '2022-05-31T04:35:07.649000+00:00'): (-0.699999988079071, 0.699999988079071), Message('i said i was gonna', '981086160606617630', '240833127713472513', '2022-05-31T06:46:08.388000+00:00'): (-0.20000000298023224, 0.20000000298023224), Message('asdasd asdasdasd a', '981179196959232000', '240833127713472513', '2022-05-31T12:55:49.983000+00:00'): (0.10000000149011612, 0.10000000149011612)}
+    # entity_sentiments, message_sentiments = analyze_sentiments(*resolve_coreferences(create_clusters(get_messages(limit=100))))
+    entity_sentiments = {'Donuts': {'above': {Message('the above is a file', '979748887768203317', '240833127713472513', '2022-05-27T14:12:17.698000+00:00'): (0.0, 0.0)}, 'bot.': {Message('testing out the bot', '979563906592821288', '240833127713472513', '2022-05-27T01:57:14.749000+00:00'): (0.0, 0.0)}, 'cluster.': {Message('yo Donuts this should be another cluster', '981013220741488670', '240833127713472513', '2022-05-31T01:56:18.169000+00:00'): (0.0, 0.0)}, 'Donuts Donuts': {Message('yo Donuts this should be another cluster', '981013220741488670', '240833127713472513', '2022-05-31T01:56:18.169000+00:00'): (0.0, 0.0)}, 'Donuts': {Message('but its pretty mudh asdasdas', '979563938301767761', '240833127713472513', '2022-05-27T01:57:22.309000+00:00'): (0.20000000298023224, 0.20000000298023224), Message('i said i was gonna', '981086160606617630', '240833127713472513', '2022-05-31T06:46:08.388000+00:00'): (0.0, 0.0), Message('i am going to lose my marbles', '981053190277591080', '240833127713472513', '2022-05-31T04:35:07.649000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('yo Donuts this should be another cluster', '981013220741488670', '240833127713472513', '2022-05-31T01:56:18.169000+00:00'): (0.0, 0.0), Message('then they have code', '981013367848337488', '240833127713472513', '2022-05-31T01:56:53.242000+00:00'): (0.0, 0.0)}, 'bot': {Message('and making sure it works', '979563917107920906', '240833127713472513', '2022-05-27T01:57:17.256000+00:00'): (0.10000000149011612, 0.10000000149011612)}, 'bot work': {Message('does this bot work or not', '979564107281887303', '240833127713472513', '2022-05-27T01:58:02.597000+00:00'): (0.0, 0.0)}, 'asdasdas': {Message('but its pretty mudh asdasdas', '979563938301767761', '240833127713472513', '2022-05-27T01:57:22.309000+00:00'): (0.30000001192092896, 0.30000001192092896)}, 'code': {Message('which is just cause there was no code', '981013288622104588', '240833127713472513', '2022-05-31T01:56:34.353000+00:00'): (0.0, 0.0), Message('then you write code', '981013361678508062', '240833127713472513', '2022-05-31T01:56:51.771000+00:00'): (0.0, 0.0), Message('then they have code', '981013367848337488', '240833127713472513', '2022-05-31T01:56:53.242000+00:00'): (0.0, 0.0), Message('programs start with no code', '981013354841780244', '240833127713472513', '2022-05-31T01:56:50.141000+00:00'): (0.0, 0.0)}, 'program': {Message('when the program was just made', '981013314618417252', '240833127713472513', '2022-05-31T01:56:40.551000+00:00'): (0.0, 0.0)}, 'Donuts yo': {Message('Donuts yo whats up', '979748640572706917', '240833127713472513', '2022-05-27T14:11:18.762000+00:00'): (0.10000000149011612, 0.10000000149011612)}, 'marbles': {Message('i am going to lose my marbles', '981053190277591080', '240833127713472513', '2022-05-31T04:35:07.649000+00:00'): (-0.20000000298023224, 0.20000000298023224)}, 'programs': {Message('programs start with no code', '981013354841780244', '240833127713472513', '2022-05-31T01:56:50.141000+00:00'): (0.0, 0.0), Message('programs work', '981013337531875439', '240833127713472513', '2022-05-31T01:56:46.014000+00:00'): (0.10000000149011612, 0.10000000149011612)}, 'work': {Message('cause thats how prgoirams work', '981013326286962698', '240833127713472513', '2022-05-31T01:56:43.333000+00:00'): (0.0, 0.0)}, 'asdasd asdasdasd': {Message('asdasd asdasdasd a', '981179196959232000', '240833127713472513', '2022-05-31T12:55:49.983000+00:00'): (0.10000000149011612, 0.10000000149011612)}, 'thats': {Message('cause thats how prgoirams work', '981013326286962698', '240833127713472513', '2022-05-31T01:56:43.333000+00:00'): (0.0, 0.0)}}}
+    message_sentiments = {'Donuts': {Message('whats poppin', '979563889333268500', '240833127713472513', '2022-05-27T01:57:10.634000+00:00'): (0.6000000238418579, 0.6000000238418579), Message('i just got here', '979563897310838874', '240833127713472513', '2022-05-27T01:57:12.536000+00:00'): (0.0, 0.0), Message('testing out the bot', '979563906592821288', '240833127713472513', '2022-05-27T01:57:14.749000+00:00'): (-0.4000000059604645, 0.4000000059604645), Message('but its pretty mudh asdasdas', '979563938301767761', '240833127713472513', '2022-05-27T01:57:22.309000+00:00'): (0.0, 0.0), Message('does this bot work or not', '979564107281887303', '240833127713472513', '2022-05-27T01:58:02.597000+00:00'): (-0.30000001192092896, 0.30000001192092896), Message('Donuts yo whats up', '979748640572706917', '240833127713472513', '2022-05-27T14:11:18.762000+00:00'): (0.0, 0.0), Message('the above is a file', '979748887768203317', '240833127713472513', '2022-05-27T14:12:17.698000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('pog whats up', '980998312289271808', '240833127713472513', '2022-05-31T00:57:03.717000+00:00'): (0.10000000149011612, 0.10000000149011612), Message('yo Donuts this should be another cluster', '981013220741488670', '240833127713472513', '2022-05-31T01:56:18.169000+00:00'): (-0.6000000238418579, 0.6000000238418579), Message('back then', '981013299523121172', '240833127713472513', '2022-05-31T01:56:36.952000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('when the program was just made', '981013314618417252', '240833127713472513', '2022-05-31T01:56:40.551000+00:00'): (-0.10000000149011612, 0.10000000149011612), Message('cause thats how prgoirams work', '981013326286962698', '240833127713472513', '2022-05-31T01:56:43.333000+00:00'): (-0.30000001192092896, 0.30000001192092896), Message('programs work', '981013337531875439', '240833127713472513', '2022-05-31T01:56:46.014000+00:00'): (0.0, 0.0), Message('programs start with no code', '981013354841780244', '240833127713472513', '2022-05-31T01:56:50.141000+00:00'): (-0.6000000238418579, 0.6000000238418579), Message('then you write code', '981013361678508062', '240833127713472513', '2022-05-31T01:56:51.771000+00:00'): (0.0, 0.0), Message('then they have code', '981013367848337488', '240833127713472513', '2022-05-31T01:56:53.242000+00:00'): (0.0, 0.0), Message('i am going to lose my marbles', '981053190277591080', '240833127713472513', '2022-05-31T04:35:07.649000+00:00'): (-0.699999988079071, 0.699999988079071), Message('i said i was gonna', '981086160606617630', '240833127713472513', '2022-05-31T06:46:08.388000+00:00'): (-0.20000000298023224, 0.20000000298023224), Message('asdasd asdasdasd a', '981179196959232000', '240833127713472513', '2022-05-31T12:55:49.983000+00:00'): (0.10000000149011612, 0.10000000149011612)}}
     # print()
     # print("Entity Sentiments")
     # print(entity_sentiments)
@@ -367,12 +370,17 @@ if __name__ == "__main__":
     # print("Entity Sentiments")
     # print(entity_sentiments)
 
+    # entity_sentiments = clean_entity_sentiments(entity_sentiments)
+    
+    # print()
+    # print("Entity Sentiments")
+    # print(entity_sentiments)
+
     # print()
     # print("Message Sentiments")
     # print(message_sentiments)
 
-    min_sentiments, max_sentiments = polarized_sentiments(message_sentiments)
+    min_sentiments, max_sentiments = polarized_sentiments(message_sentiments['Donuts'])
     print("Most Negative Sentiment", min_sentiments)
     print()
     print("Most Positive Sentiment", max_sentiments)
-    # print(Message('hello', '123', '123', '2022-05-31T14:21:44.956522'))
