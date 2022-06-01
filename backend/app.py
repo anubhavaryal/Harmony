@@ -54,6 +54,38 @@ users = {}
 running = False
 
 
+'''
+data to store
+--------------
+- request
+    - user cache
+        - user id
+            - username
+        - user id
+        - user id
+    - running status (true/false)
+    - progress status (0.0 - 1.0)
+    - entity sentiments
+        - entity
+            - other entity
+                - sentiment
+                    - score
+                    - magnitude
+                - sentiment
+                - sentiment
+            - another entity
+                - ...
+    - message sentiments
+        - entity
+            - message
+                - sentiment
+                    - score
+                    - magnitude
+            - message
+            - message
+'''
+
+
 @app.route("/start")
 def start_analysis():
     global running
