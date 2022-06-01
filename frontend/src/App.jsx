@@ -1,9 +1,17 @@
-import { useState } from 'react'
-import logo from './logo.svg'
-import './App.css'
+import { useState } from "react";
+import logo from "./logo.svg";
+import "./App.css";
+
+/**
+ * app will first call /start which starts analysis
+ * app will keep requesting /pog for progress and display that progress to user
+ * once /pog shows analysis is complete the user can request their data through /sentiment endpoints
+ * analysis can be stopped at any time with /stop
+ * maybe backend will require frequent pings with /ping or smth so it knows to continue analysis because if frontend loses connections thats a big rip
+ */
 
 function App() {
-  const [count, setCount] = useState(0)
+  const [count, setCount] = useState(0);
 
   return (
     <div className="App">
@@ -27,7 +35,7 @@ function App() {
           >
             Learn React
           </a>
-          {' | '}
+          {" | "}
           <a
             className="App-link"
             href="https://vitejs.dev/guide/features.html"
@@ -39,7 +47,7 @@ function App() {
         </p>
       </header>
     </div>
-  )
+  );
 }
 
-export default App
+export default App;

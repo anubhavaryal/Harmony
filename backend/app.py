@@ -47,7 +47,7 @@ type_ = language_v1.types.Document.Type.PLAIN_TEXT
 language = "en"
 encoding_type = language_v1.EncodingType.UTF8
 
-# dict of users for their respective user_id's
+# cache of user_ids and their respective users
 users = {}
 
 # if the app is currently running
@@ -216,13 +216,10 @@ def get_messages(limit=5):
     return messages
 
 
-# creates clusters of messages based on time frame to prepare for coref
+# creates clusters of messages based on time frame to prepare for coreference resolution
 def create_clusters(messages):
-    # max amount of time between start message and last message in the cluster
-    max_dist = timedelta(minutes=5)
-
-    # max amount of time between consecutive messages in the cluster
-    dist = timedelta(minutes=1)
+    max_cum_dist = timedelta(minutes=5)  # max amount of time between first and last message in the cluster
+    max_dist = timedelta(minutes=1)  # max amount of time between consecutive messages in the cluster
 
     # stores message clusters
     clusters = []
@@ -237,8 +234,8 @@ def create_clusters(messages):
             first_delta = cluster[0].time - message.time
             last_delta = cluster[-1].time - message.time
 
-            # if time difference too large/surpasses max dist, create new cluster
-            if last_delta > dist or first_delta > max_dist:
+            # if time difference too large/surpasses max dists, create new cluster
+            if last_delta > max_dist or first_delta > max_cum_dist:
                 clusters.append(cluster)
                 cluster = []
             
@@ -253,6 +250,7 @@ def create_clusters(messages):
 
 # resolves coreferences in message clusters
 def resolve_coreferences(clusters):
+    # messages after updated with coreference resolution
     messages = []
 
     # pattern matches "username said "
@@ -277,6 +275,7 @@ def resolve_coreferences(clusters):
         for (message, new_message) in zip(cluster, new_messages):
             messages.append(Message(new_message, message.message_id, message.user_id, message.timestamp))
     
+    # original messages passed to function
     original_messages = [message for cluster in clusters for message in cluster]  # flatten cluster
     return messages, original_messages
 
@@ -290,7 +289,7 @@ def analyze_sentiments(messages, original_messages):
     # sentiment of each message (user min/max sentiments can be derived from this dict)
     message_sentiments = {}
 
-    # stores content of document (each api document unit can have up to 1000 characters) 
+    # stores content of document
     content = ""
 
 
@@ -310,12 +309,11 @@ def analyze_sentiments(messages, original_messages):
 
     # computes entity and message sentiments for content
     def compute_sentiments(content):
-        # ensure that content is contained in a single unit (< 1000 characters)
+        # ensure that content is contained in a single unit (one API unit is < 1000 characters)
         assert len(content) < 1000
 
         # create document
         document = {'content': content, 'type_': type_, 'language': language}
-        print(document)
 
         sentiment_response = client.analyze_sentiment(request={'document': document, 'encoding_type': encoding_type})
 
@@ -377,7 +375,7 @@ def clean_entity_sentiments(entity_sentiments):
 
 
 # returns messages with the min/max sentiment
-def polarized_sentiments(user_sentiments):
+def min_max_sentiments(user_sentiments):
     min_sentiment = None
     max_sentiment = None
 
@@ -403,9 +401,9 @@ def average_sentiment(user_sentiments):
     avg_score, avg_magnitude = 0, 0
 
     # calculate average score and magnitude
-    for message in user_sentiments:
-        avg_score += user_sentiments[message][0]
-        avg_magnitude += user_sentiments[message][1]
+    for _, (score, magnitude) in user_sentiments.items():
+        avg_score += score
+        avg_magnitude += magnitude
     
     avg_score /= len(user_sentiments)
     avg_magnitude /= len(user_sentiments)
@@ -413,11 +411,13 @@ def average_sentiment(user_sentiments):
     return avg_score, avg_magnitude
 
 
-# inverses the dict so that it shows how the child refers to the parent (instead of showing how parent refers to child)
+# inverts the dict so that it shows how the child refers to the parent (instead of showing how parent refers to child)
 def invert_entity_sentiment(entity_sentiment):
     inverse = {}
+
     for entity in entity_sentiment:
         for other_entity in entity_sentiment[entity]:
+            # add other entity as parent entity and add entity as child entity
             if other_entity not in inverse:
                 inverse[other_entity] = {}
             inverse[other_entity][entity] = {**inverse.get(other_entity, {}), **entity_sentiment[entity][other_entity]}
