@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from flask import Flask
+from flask import Flask, g
 from google.cloud import language_v1
 import neuralcoref
 import os
 import re
 import requests
 import spacy
+import sqlite3
 import time
 
 app = Flask(__name__)
@@ -36,6 +37,11 @@ class Message:
 # load variables from .env
 load_dotenv()
 token = os.getenv("DISCORD_TOKEN")
+
+# connect to database
+conn = sqlite3.connect("/db/database.db")
+cur = conn.cursor()
+
 
 # load nlp
 nlp = spacy.load('en_core_web_sm')
