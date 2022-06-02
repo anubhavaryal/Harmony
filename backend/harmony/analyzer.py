@@ -14,7 +14,7 @@ nlp = spacy.load('en_core_web_sm')
 neuralcoref.add_to_pipe(nlp, blacklist=False)
 
 # instantiate google client
-# client = language_v1.LanguageServiceClient()
+client = language_v1.LanguageServiceClient()
 type_ = language_v1.types.Document.Type.PLAIN_TEXT
 language = "en"
 encoding_type = language_v1.EncodingType.UTF8
@@ -171,7 +171,7 @@ class Analyzer:
 
                 # reset variables
                 cluster_message = u""
-                prev_id = id
+                prev_id = cluster_id
 
             # prepare message by surrounding in quotes and prepending it with "(username) said"
             content = username  + ' said "' + message.content.replace('"', '\'') + '." '
@@ -231,13 +231,17 @@ class Analyzer:
             entity_response = client.analyze_entity_sentiment(request={'document': document, 'encoding_type': encoding_type})
 
             for entity in entity_response.entities:
-                for mention in entity.mentions:
-                    # find message using span of entity
-                    message_id = find_message(mention)
-                    message_sentiment_id = Message.query.get(message_id).sentiment.id
+                print(entity.name)
+                # skip entity if not user
+                user = User.query.filter_by(username=entity.name).first()
+                if user is not None:
+                    for mention in entity.mentions:
+                        # find message using span of entity
+                        message_id = find_message(mention)
+                        message_sentiment_id = Message.query.get(message_id).sentiment.id
 
-                    # add user sentiment to database
-                    db.session.add(UserSentiment(score=mention.sentiment.score, magnitude=mention.sentiment.magnitude, message_sentiment_id=message_sentiment_id))
+                        # add user sentiment to database
+                        db.session.add(UserSentiment(score=mention.sentiment.score, magnitude=mention.sentiment.magnitude, user_id=user.id, message_sentiment_id=message_sentiment_id))
             
             db.session.commit()
         

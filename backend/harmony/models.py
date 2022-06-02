@@ -53,6 +53,7 @@ class User(db.Model):
     username = db.Column(db.String(32), nullable=False)
     # channel_id = db.Column(db.String(32), db.ForeignKey('channel.id'), nullable=False)
     messages = db.relationship('Message', backref='user', lazy=True)
+    sentiments = db.relationship('UserSentiment', backref='user', lazy=True)
 
     def __repr__(self):
         return f"User('{self.id}', '{self.username}')"
@@ -108,6 +109,7 @@ class UserSentiment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     score = db.Column(db.Float, nullable=False)
     magnitude = db.Column(db.Float, nullable=False)
+    user_id = db.Column(db.Text, db.ForeignKey('user.id'), nullable=False)
     message_sentiment_id = db.Column(db.Integer, db.ForeignKey('message_sentiment.id'), nullable=False)
 
     def __repr__(self):
@@ -122,4 +124,3 @@ class MessageSentiment(db.Model):
 
     def __repr__(self):
         return f"MessageSentiment({self.id}, {self.score}, {self.magnitude}, '{self.message_id}')"
-
