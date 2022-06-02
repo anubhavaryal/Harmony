@@ -13,11 +13,11 @@ import spacy
 nlp = spacy.load('en_core_web_sm')
 neuralcoref.add_to_pipe(nlp, blacklist=False)
 
-# # instantiate google client
+# instantiate google client
 # client = language_v1.LanguageServiceClient()
-# type_ = language_v1.types.Document.Type.PLAIN_TEXT
-# language = "en"
-# encoding_type = language_v1.EncodingType.UTF8
+type_ = language_v1.types.Document.Type.PLAIN_TEXT
+language = "en"
+encoding_type = language_v1.EncodingType.UTF8
 
 # constants used by create_clusters
 MAX_CUM_DIST = timedelta(minutes=10)  # max amount of time between first and last message in the cluster
@@ -31,9 +31,10 @@ class Analyzer:
     # starts analyzing the messages
     def start_analysis(self, limit=5):
         # add channel to database
-        channel = Channel(id=self.channel_id, running=True, stage=0, progress=0)
-        db.session.add(channel)
+        db.session.add(Channel(id=self.channel_id, running=True, stage=0, progress=0))
         db.session.commit()
+
+        channel = Channel.query.filter_by(id=self.channel_id)
 
         # store messages
         print("getting messages")
@@ -49,6 +50,11 @@ class Analyzer:
         print("starting coref")
         self.resolve_coreferences()
         print("finished coref")
+
+        # sentiment analysis
+        print("starting sentiment")
+        self.analyze_sentiments()
+        print("finished sentiment")
 
 
     # stores all messages in the channel in the database
@@ -70,7 +76,7 @@ class Analyzer:
                     # store user and message in database
                     add_user(message['author']['id'], self.channel_id)
 
-                    db.session.add(Message(id=message['id'], content=message['content'], timestamp=message['timestamp'], user_id=message['author']['id']))
+                    db.session.add(Message(id=message['id'], content=message['content'], timestamp=message['timestamp'], channel_id=self.channel_id, user_id=message['author']['id']))
                     num_msgs += 1
 
                 # stop once message limit has been reached
@@ -148,10 +154,10 @@ class Analyzer:
         # combine all messages in cluster to assist with coreference resolution
         cluster_message = u""
 
-        for (message, id, username) in messages:
+        for (message, cluster_id, username) in messages:
             if prev_id is None:
-                prev_id = id
-            elif prev_id != id:
+                prev_id = cluster_id
+            elif prev_id != cluster_id:
                 # resolve coreferences
                 doc = nlp(cluster_message)
 
@@ -184,35 +190,26 @@ class Analyzer:
         db.session.commit()
 
 
+    # stores result of sentiment analysis
+    def analyze_sentiments(self):
+        # get all messages for this channel
+        messages = CorefMessage.query.join(Message, CorefMessage.message_id == Message.id).filter(Message.channel_id == self.channel_id)
 
-    # sentiment analysis on entities and messages
-    def analyze_sentiments(messages, original_messages):
-        print("DOING SENTIMENT ANALYSIS")
-        # sentiment of this user referring to other users (sentiment of other users referring to this user can be derived from this dict)
-        entity_sentiments = {}
-
-        # sentiment of each message (user min/max sentiments can be derived from this dict)
-        message_sentiments = {}
-
-        # stores content of document
-        content = ""
-
-
-        # finds the message containing the given mention
+        # finds the message in the database associated with the mention analyzed by the api
         def find_message(mention):
             offset = mention.text.begin_offset
             dist = 2  # distance between two messages in the "content" string (each message is separated with 2 characters, ". ")
 
-            for (message, original_message) in zip(messages, original_messages):
-                # if the mention is contained within the current message, return it
+            for message in messages:
+                # if the mention is contained within the current message, return its id
                 if len(message.content) > offset:
-                    return original_message
+                    return message.message_id
 
                 # move to next message
-                offset -= len(message.content) + dist
-        
+                offset -= len(message.content) + dist  
 
-        # computes entity and message sentiments for content
+
+        # computes user and message sentiments for content
         def compute_sentiments(content):
             # ensure that content is contained in a single unit (one API unit is < 1000 characters)
             assert len(content) < 1000
@@ -224,45 +221,38 @@ class Analyzer:
 
             for sentence in sentiment_response.sentences:
                 # find message using span of sentence
-                sentence_message = find_message(sentence)
+                message_id = find_message(sentence)
 
-                # initialize dict value if it doesnt yet exist
-                if users[sentence_message.user_id] not in message_sentiments:
-                    message_sentiments[users[sentence_message.user_id]] = {}
-
-                # update message sentiments
-                message_sentiments[users[sentence_message.user_id]][sentence_message] = (sentence.sentiment.score, sentence.sentiment.magnitude)
+                # add message sentiment to database
+                db.session.add(MessageSentiment(score=sentence.sentiment.score, magnitude=sentence.sentiment.magnitude, message_id=message_id))
+            
+            db.session.commit()
             
             entity_response = client.analyze_entity_sentiment(request={'document': document, 'encoding_type': encoding_type})
 
             for entity in entity_response.entities:
-                # find message using span of entity
                 for mention in entity.mentions:
-                    entity_message = find_message(mention)
+                    # find message using span of entity
+                    message_id = find_message(mention)
+                    message_sentiment_id = Message.query.get(message_id).sentiment.id
 
-                    # initialize dict value if it doesnt yet exist
-                    if users[entity_message.user_id] not in entity_sentiments:
-                        entity_sentiments[users[entity_message.user_id]] = {}
-                    
-                    if entity.name not in entity_sentiments[users[entity_message.user_id]]:
-                        entity_sentiments[users[entity_message.user_id]][entity.name] = {}
-                    
-                    # update entity sentiments
-                    entity_sentiments[users[entity_message.user_id]][entity.name][entity_message] = (mention.sentiment.score, mention.sentiment.magnitude)
+                    # add user sentiment to database
+                    db.session.add(UserSentiment(score=mention.sentiment.score, magnitude=mention.sentiment.magnitude, message_sentiment_id=message_sentiment_id))
+            
+            db.session.commit()
+        
 
-
+        # stores content of document
+        content = ""
+        
         for message in messages:
             if len(message.content) + len(content) < 1000:
                 # add message to current group if character limit not reached
                 content += message.content + ". "
             else:
-                # compute unit of messages
                 compute_sentiments(content)
                 content = ""
-        
+
         # compute last unit of messages
         if len(content) > 0:
             compute_sentiments(content)
-            content = ""
-        
-        return entity_sentiments, message_sentiments
