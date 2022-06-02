@@ -25,8 +25,12 @@ def send_request(url):
 
 # adds user to database
 def add_user(user_id, channel_id):
-    # check if user is not yet stored in database
-    if get_user(user_id) is None:
+    # check if user and channel exist in database
+    user = User.query.get(user_id)
+    channel = Channel.query.get(channel_id)
+
+    if user is None:
+        # add user to database if it doesnt exist
         data = send_request(f"/users/{user_id}")
         user = User(id=user_id, username=data['username'])
 
@@ -36,11 +40,10 @@ def add_user(user_id, channel_id):
 
         db.session.add(user)
         db.session.commit()
-        
-
-# find and returns user with the given id
-def get_user(user_id):
-    return User.query.filter_by(id=user_id).first()
+    elif channel not in user.channels:
+        # add channel to user if not yet a part of user
+        user.channels.append(channel)
+        db.session.commit()
 
 
 # prepares Discord message object for analysis
@@ -54,14 +57,6 @@ def prepare_message(message):
     mention_regex = r"<@!?(\d+)>"  # regex to find mentions in messages
     code_regex = r"```.+\n.*\n```"  # regex to find code blocks
     special_chars_regex = r"[^A-Za-z0-9\'\" ]+"  # regex to find special characters (not alphanumeric, quotes, or space)
-
-    # finds and returns user using the matched mention
-    def get_user_from_mention(match):
-        # get user id from mention
-        user_id = match.group(1)
-
-        return get_user(user_id)
-
 
     # ensure message type is 0 (DEFAULT)
     if message['type'] != 0:
@@ -80,7 +75,7 @@ def prepare_message(message):
         return
 
     # replace mentions with respective user
-    message['content'] = re.sub(mention_regex, get_user_from_mention, message['content'])
+    message['content'] = re.sub(mention_regex, lambda match : User.query.get(match.group(1)), message['content'])
 
     # remove special characters
     message['content'] = re.sub(special_chars_regex, '', message['content'])
