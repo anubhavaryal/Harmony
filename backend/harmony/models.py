@@ -1,40 +1,6 @@
 from harmony import db
 
 
-# TODO: get rid of this
-def create_test_data():
-    db.create_all()
-
-    channel = Channel(id='1', running=False, stage=0, progress=0)
-    db.session.add(channel)
-
-    user = User(id='1', username='Donuts')
-    user.channels.append(channel)
-    db.session.add(user)
-    
-    message = Message(id='1', channel_id='1', user_id='1', content='this is content', timestamp='today')
-    db.session.add(message)
-
-    cluster = MessageCluster(id=1, channel_id='1')
-    db.session.add(cluster)
-
-    cluster_message = ClusterMessage(id=1, message_id='1', message_cluster_id=1)
-    db.session.add(cluster_message)
-
-    coref_message = CorefMessage(id=1, cluster_message_id=1, content='this is coref content')
-    db.session.add(coref_message)
-
-    message_sentiment = MessageSentiment(id=1, message_id='1', score=0.4, magnitude=0.6)
-    db.session.add(message_sentiment)
-
-    user_sentiment1 = UserSentiment(id=1, message_id='1', subject_user_id='1', object_user_id='1', score=-0.5, magnitude=0.2)
-    user_sentiment2 = UserSentiment(id=2, message_id='1', subject_user_id='1', object_user_id='1', score=0.7, magnitude=0.5)
-    db.session.add_all([user_sentiment1, user_sentiment2])
-
-
-    db.session.commit()
-
-
 # bridge entity used for many-many relationship between channels and users
 user_bridge_association = db.Table('users',
     db.Column('user_id', db.String(32), db.ForeignKey('user.id'), primary_key=True),
@@ -111,7 +77,8 @@ class CorefMessage(db.Model):
     content = db.Column(db.Text, nullable=False)  # content of the message after coreference resolution
 
     cluster_message = db.relationship('ClusterMessage', back_populates='coref_message')
-    message = db.relationship('Message', secondary='cluster_message', primaryjoin='CorefMessage.cluster_message_id == ClusterMessage.id', secondaryjoin='ClusterMessage.message_id == Message.id', backref=db.backref('coref_message', uselist=False), uselist=False, viewonly=True)
+    message = db.relationship('Message', secondary='cluster_message', primaryjoin='CorefMessage.cluster_message_id == ClusterMessage.id', secondaryjoin='ClusterMessage.message_id == Message.id',
+        backref=db.backref('coref_message', uselist=False), uselist=False, viewonly=True)
 
 
 # the sentiment of a message
