@@ -1,9 +1,15 @@
 from harmony import db
-from harmony.models import User, Channel
+from harmony.models import User, Channel, MessageSentiment, Message, UserSentiment
 import os
 import re
 import requests
 import time
+
+# TODO: create another class for helper to store channel_id??
+# TODO: remove this
+from dotenv import load_dotenv
+import os
+load_dotenv()
 
 # load token from .env
 token = os.getenv("DISCORD_TOKEN")
@@ -47,7 +53,7 @@ def add_user(user_id, channel_id):
 
 
 # prepares Discord message object for analysis
-def prepare_message(message):
+def prepare_message(message, channel_id):
     # min and max length of messages
     min_size = 10
     max_size = 50
@@ -74,8 +80,15 @@ def prepare_message(message):
     if len(re.findall(link_regex, message['content'])) != 0:
         return
 
+
+    # return username of the mentioned user
+    def get_username_from_mention(match):
+        add_user(match.group(1), channel_id)  # group(1) contains id of the mentioned user
+        return User.query.get(match.group(1)).username
+
+
     # replace mentions with respective user
-    message['content'] = re.sub(mention_regex, lambda match : User.query.get(match.group(1)), message['content'])
+    message['content'] = re.sub(mention_regex, get_username_from_mention, message['content'])
 
     # remove special characters
     message['content'] = re.sub(special_chars_regex, '', message['content'])
@@ -90,38 +103,34 @@ def prepare_message(message):
     return message
 
 
-# # removes all entity sentiments that refer to non-user entities
-# def clean_entity_sentiments(entity_sentiments):
-#     for this_entity in entity_sentiments:
-#         # remove all non-user entities
-#         for other_entity in list(entity_sentiments[this_entity]):
-#             if other_entity not in users.values():
-#                 del entity_sentiments[this_entity][other_entity]
+# returns messages with the most and least sentiment in the channel
+def min_max_sentiments(channel_id):
+    # get all message sentiments in channel
+    sentiments = MessageSentiment.query.join(Message, MessageSentiment.message).filter(Message.channel_id == channel_id)
+    min_sentiment = sentiments.first()
+    max_sentiment = min_sentiment
+
+    for sentiment in sentiments:
+        # update min/max sentiments based on score
+        if min_sentiment.score > sentiment.score:
+            min_sentiment = sentiment
+        elif max_sentiment.score < sentiment.score:
+            max_sentiment = sentiment
+
+    return min_sentiment, max_sentiment
+
+
+# returns the average sentiment score and magnitude for a user referring to another user
+def avg_sentiment(this_user_id, other_user_id, channel_id):
+    # get all user sentiments by this_user that refer to the other_user
+    user_sentiments = UserSentiment.query.join(User, UserSentiment.user_id == User.id).join(Channel, User.channels).filter(Channel.id == channel_id).filter(UserSentiment.message_sentiment.message.user.id == this_user_id).filter(U)
+    user_sentiments = UserSentiment.query.join(Channel, UserSentiment.message_sentiment.message.user.channels).filter(UserSentiment.user_id == other_user_id).filter(UserSentiment.message_sentiment.message.user.id == this_user_id)
     
-#     return entity_sentiments
+    for user_sentiment in user_sentiments:
+        # average value of sentiments that were said by this_user
 
 
-# # returns messages with the min/max sentiment
-# def min_max_sentiments(user_sentiments):
-#     min_sentiment = None
-#     max_sentiment = None
-
-#     for message in user_sentiments:
-#         sentiment = (message, *user_sentiments[message])
-        
-#         # if min/max sentiments do not yet have a value
-#         if min_sentiment is None:
-#             min_sentiment = sentiment
-#             max_sentiment = sentiment
-#         else:
-#             # update min/max sentiments
-#             if min_sentiment[1] * min_sentiment[2] > sentiment[1] * sentiment[2]:
-#                 min_sentiment = sentiment
-#             elif max_sentiment[1] * max_sentiment[2] < sentiment[1] * sentiment[2]:
-#                 max_sentiment = sentiment
-    
-#     return min_sentiment, max_sentiment
-
+        pass
 
 # # returns average score and magnitude in a list of sentiments
 # def average_sentiment(user_sentiments):

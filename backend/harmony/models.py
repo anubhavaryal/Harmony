@@ -1,126 +1,140 @@
 from harmony import db
 
-'''
-data to store
---------------
-- request
-    - user cache
-        - user id
-            - username
-        - user id
-        - user id
-    - running status (true/false)
-    - progress status (0.0 - 1.0)
-    - entity sentiments
-        - entity
-            - other entity
-                - sentiment
-                    - score
-                    - magnitude
-                - sentiment
-                - sentiment
-            - another entity
-                - ...
-    - message sentiments
-        - entity
-            - message
-                - sentiment
-                    - score
-                    - magnitude
-            - message
-            - message
-'''
 
-users = db.Table('users', 
-    db.Column('user_id', db.String(32), db.ForeignKey('user.id'), primary_key=True), 
+# TODO: get rid of this
+def create_test_data():
+    db.create_all()
+
+    channel = Channel(id='1', running=False, stage=0, progress=0)
+    db.session.add(channel)
+
+    user = User(id='1', username='Donuts')
+    user.channels.append(channel)
+    db.session.add(user)
+    
+    message = Message(id='1', channel_id='1', user_id='1', content='this is content', timestamp='today')
+    db.session.add(message)
+
+    cluster = MessageCluster(id=1, channel_id='1')
+    db.session.add(cluster)
+
+    cluster_message = ClusterMessage(id=1, message_id='1', message_cluster_id=1)
+    db.session.add(cluster_message)
+
+    coref_message = CorefMessage(id=1, cluster_message_id=1, content='this is coref content')
+    db.session.add(coref_message)
+
+    message_sentiment = MessageSentiment(id=1, message_id='1', score=0.4, magnitude=0.6)
+    db.session.add(message_sentiment)
+
+    user_sentiment1 = UserSentiment(id=1, message_id='1', subject_user_id='1', object_user_id='1', score=-0.5, magnitude=0.2)
+    user_sentiment2 = UserSentiment(id=2, message_id='1', subject_user_id='1', object_user_id='1', score=0.7, magnitude=0.5)
+    db.session.add_all([user_sentiment1, user_sentiment2])
+
+
+    db.session.commit()
+
+
+# bridge entity used for many-many relationship between channels and users
+user_bridge_association = db.Table('users',
+    db.Column('user_id', db.String(32), db.ForeignKey('user.id'), primary_key=True),
     db.Column('channel_id', db.String(32), db.ForeignKey('channel.id'), primary_key=True)
 )
 
+
+# each Discord channel being analyzed
 class Channel(db.Model):
     id = db.Column(db.String(32), primary_key=True)
-    running = db.Column(db.Boolean, nullable=False)
-    stage = db.Column(db.Integer, nullable=False)
-    progress = db.Column(db.Integer, nullable=False)
-    users = db.relationship('User', secondary=users, lazy='subquery', backref=db.backref('channels', lazy=True))
-    clusters = db.relationship('MessageCluster', backref='channel', lazy=True)
-    messages = db.relationship('Message', backref='channel', lazy=True)
 
-    def __repr__(self):
-        return f"Channel('{self.id}', {self.running}, {self.progress})"
+    running = db.Column(db.Boolean, nullable=False)  # whether the channel is currently being analyzed
+    stage = db.Column(db.Integer, nullable=False)  # the current analysis stage
+    progress = db.Column(db.Integer, nullable=False)  # the progress in the current stage
 
+    users = db.relationship('User', secondary=user_bridge_association, back_populates='channels', lazy='dynamic')
+    messages = db.relationship('Message', back_populates='channel')
+    clusters = db.relationship('MessageCluster', back_populates='channel')
+
+
+# a Discord user
 class User(db.Model):
     id = db.Column(db.String(32), primary_key=True)
+
     username = db.Column(db.String(32), nullable=False)
-    # channel_id = db.Column(db.String(32), db.ForeignKey('channel.id'), nullable=False)
-    messages = db.relationship('Message', backref='user', lazy=True)
-    sentiments = db.relationship('UserSentiment', backref='user', lazy=True)
 
-    def __repr__(self):
-        return f"User('{self.id}', '{self.username}')"
+    channels = db.relationship('Channel', secondary=user_bridge_association, back_populates='users')
+    messages = db.relationship('Message', back_populates='user')
+    object_sentiments = db.relationship('UserSentiment', foreign_keys='UserSentiment.object_user_id', back_populates='object_user')
+    subject_sentiments = db.relationship('UserSentiment', foreign_keys='UserSentiment.subject_user_id', back_populates='subject_user')
 
-class Message(db.Model):
-    id = db.Column(db.String(32), primary_key=True)
-    content = db.Column(db.Text, nullable=False)
-    timestamp = db.Column(db.Text, nullable=False)
-    channel_id = db.Column(db.String(32), db.ForeignKey('channel.id'), nullable=False)
-    user_id = db.Column(db.String(32), db.ForeignKey('user.id'), nullable=False)
-    coref_message = db.relationship('CorefMessage', backref='message', uselist=False)
-    sentiment = db.relationship('MessageSentiment', backref='message', uselist=False)
 
-    def __repr__(self):
-        return f"Message('{self.id}', '{self.content}', '{self.timestamp}', '{self.user_id}')"
-
-class CorefMessage(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    content = db.Column(db.Text, nullable=False)
-    message_id = db.Column(db.Text, db.ForeignKey('message.id'), nullable=False)
-    cluster_id = db.Column(db.Integer, db.ForeignKey('message_cluster.id'), nullable=False)
-
-    def __repr__(self):
-        return f"CorefMessage({self.id}, '{self.content}', '{self.message_id}', '{self.cluster_id}')"
-
+# a group of messages that share the same channel and were sent around the same time frame
 class MessageCluster(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    coref_messages = db.relationship('CorefMessage', backref='cluster', lazy=True)
     channel_id = db.Column(db.String(32), db.ForeignKey('channel.id'), nullable=False)
 
-    def __repr__(self):
-        return f"MessageCluster({self.id}, '{self.channel_id}')"
+    channel = db.relationship('Channel', back_populates='clusters')
+    messages = db.relationship('ClusterMessage', back_populates='cluster')
 
-# TODO: modify model so that each user has a bunch of users with user sentiments
-# TODO: check previous git commits to see if have to do same for MessageSentiment
-'''
-user
-- other user
-   - bunch of messages with sentiments
 
-user id
-- other user id
-   - bunch of message ids (each message has message sentiment already but not the individual entity sentiments)
+# a Discord message
+class Message(db.Model):
+    id = db.Column(db.String(32), primary_key=True)
+    channel_id = db.Column(db.String(32), db.ForeignKey('channel.id'), nullable=False)
+    user_id = db.Column(db.String(32), db.ForeignKey('user.id'), nullable=False)
 
-maybe make each message sentiment contain a bunch of user sentiments for each entity present in the message?
+    content = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.Text, nullable=False)
 
-now the format is
-user
-- messages (each message has sentiment which has user sentiment so by having access to the user, it is possible to access their message sentiments thereby giving the opinion they have of others)
-'''
+    channel = db.relationship('Channel', back_populates='messages')
+    user = db.relationship('User', back_populates='messages')
+    cluster_message = db.relationship('ClusterMessage', back_populates='message', uselist=False)
+    message_sentiment = db.relationship('MessageSentiment', back_populates='message', uselist=False)
+    user_sentiments = db.relationship('UserSentiment', back_populates='message')
 
-class UserSentiment(db.Model):
+
+# a message that belongs to a cluster
+class ClusterMessage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    score = db.Column(db.Float, nullable=False)
-    magnitude = db.Column(db.Float, nullable=False)
-    user_id = db.Column(db.Text, db.ForeignKey('user.id'), nullable=False)
-    message_sentiment_id = db.Column(db.Integer, db.ForeignKey('message_sentiment.id'), nullable=False)
+    message_id = db.Column(db.String(32), db.ForeignKey('message.id'), nullable=False)
+    message_cluster_id = db.Column(db.Integer, db.ForeignKey('message_cluster.id'), nullable=False)
 
-    def __repr__(self):
-        return f"UserSentiment({self.id}, {self.score}, {self.magnitude}, {self.message_sentiment_id})"
+    message = db.relationship('Message', back_populates='cluster_message')
+    coref_message = db.relationship('CorefMessage', back_populates='cluster_message', uselist=False)
+    cluster = db.relationship('MessageCluster', back_populates='messages')
 
+
+# a message after it has had its coreferences resolved
+class CorefMessage(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    cluster_message_id = db.Column(db.Integer, db.ForeignKey('cluster_message.id'), nullable=False)
+
+    content = db.Column(db.Text, nullable=False)  # content of the message after coreference resolution
+
+    cluster_message = db.relationship('ClusterMessage', back_populates='coref_message')
+    message = db.relationship('Message', secondary='cluster_message', primaryjoin='CorefMessage.cluster_message_id == ClusterMessage.id', secondaryjoin='ClusterMessage.message_id == Message.id', backref=db.backref('coref_message', uselist=False), uselist=False, viewonly=True)
+
+
+# the sentiment of a message
 class MessageSentiment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    score = db.Column(db.Float, nullable=False)
-    magnitude = db.Column(db.Float, nullable=False)
-    user_sentiments = db.relationship('UserSentiment', backref='message_sentiment', lazy=True)
     message_id = db.Column(db.String(32), db.ForeignKey('message.id'), nullable=False)
 
-    def __repr__(self):
-        return f"MessageSentiment({self.id}, {self.score}, {self.magnitude}, '{self.message_id}')"
+    score = db.Column(db.Float, nullable=False)
+    magnitude = db.Column(db.Float, nullable=False)
+
+    message = db.relationship('Message', back_populates='message_sentiment')
+
+
+# the sentiment of the users present in the message contents
+class UserSentiment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(db.String(32), db.ForeignKey('message.id'), nullable=False)
+    object_user_id = db.Column(db.String(32), db.ForeignKey('user.id'), nullable=False)
+    subject_user_id = db.Column(db.String(32), db.ForeignKey('user.id'), nullable=False)
+
+    score = db.Column(db.Float, nullable=False)
+    magnitude = db.Column(db.Float, nullable=False)
+
+    message = db.relationship('Message', back_populates='user_sentiments')
+    object_user = db.relationship('User', foreign_keys=[object_user_id], back_populates='object_sentiments')  # the user referring to subject_user
+    subject_user = db.relationship('User', foreign_keys=[subject_user_id], back_populates='subject_sentiments')  # the user being referred to
