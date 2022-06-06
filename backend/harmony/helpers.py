@@ -10,6 +10,8 @@ import time
 from dotenv import load_dotenv
 import os
 load_dotenv()
+uid = '240833127713472513'
+cid = '979554513021177909'
 
 # load token from .env
 token = os.getenv("DISCORD_TOKEN")
@@ -120,42 +122,13 @@ def min_max_sentiments(channel_id):
     return min_sentiment, max_sentiment
 
 
-# returns the average sentiment score and magnitude for a user referring to another user
-def avg_sentiment(this_user_id, other_user_id, channel_id):
-    # get all user sentiments by this_user that refer to the other_user
-    user_sentiments = UserSentiment.query.join(User, UserSentiment.user_id == User.id).join(Channel, User.channels).filter(Channel.id == channel_id).filter(UserSentiment.message_sentiment.message.user.id == this_user_id).filter(U)
-    user_sentiments = UserSentiment.query.join(Channel, UserSentiment.message_sentiment.message.user.channels).filter(UserSentiment.user_id == other_user_id).filter(UserSentiment.message_sentiment.message.user.id == this_user_id)
-    
-    for user_sentiment in user_sentiments:
-        # average value of sentiments that were said by this_user
+# returns the average sentiment score and magnitude for the object user referring to the subject user
+def avg_sentiment(object_user_id, subject_user_id, channel_id):
+    # get average score and magnitude for UserSentiments that fit the specified criteria
+    avg_score, avg_magnitude = UserSentiment.query.join(Message, UserSentiment.message)\
+        .filter(Message.channel_id == channel_id)\
+        .filter(UserSentiment.object_user_id == object_user_id)\
+        .filter(UserSentiment.subject_user_id == subject_user_id)\
+        .with_entities(db.func.avg(UserSentiment.score), db.func.avg(UserSentiment.magnitude)).first()
 
-
-        pass
-
-# # returns average score and magnitude in a list of sentiments
-# def average_sentiment(user_sentiments):
-#     avg_score, avg_magnitude = 0, 0
-
-#     # calculate average score and magnitude
-#     for _, (score, magnitude) in user_sentiments.items():
-#         avg_score += score
-#         avg_magnitude += magnitude
-    
-#     avg_score /= len(user_sentiments)
-#     avg_magnitude /= len(user_sentiments)
-
-#     return avg_score, avg_magnitude
-
-
-# # inverts the dict so that it shows how the child refers to the parent (instead of showing how parent refers to child)
-# def invert_entity_sentiment(entity_sentiment):
-#     inverse = {}
-
-#     for entity in entity_sentiment:
-#         for other_entity in entity_sentiment[entity]:
-#             # add other entity as parent entity and add entity as child entity
-#             if other_entity not in inverse:
-#                 inverse[other_entity] = {}
-#             inverse[other_entity][entity] = {**inverse.get(other_entity, {}), **entity_sentiment[entity][other_entity]}
-    
-#     return inverse
+    return avg_score, avg_magnitude
