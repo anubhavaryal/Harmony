@@ -1,18 +1,18 @@
-from datetime import datetime, timedelta
-from harmony import db
-from harmony.helpers import add_user, prepare_message, send_request
-from harmony.models import Channel, CorefMessage, ClusterMessage, Message, MessageCluster, MessageSentiment, User, UserSentiment
-from google.cloud import language_v1
 import neuralcoref
 import re
 import spacy
+from datetime import datetime, timedelta
+from harmony import db
+from harmony.helpers import Helper, send_request
+from harmony.models import Channel, CorefMessage, ClusterMessage, Message, MessageCluster, MessageSentiment, User, UserAlternate, UserSentiment
+from google.cloud import language_v1
 
 
 # TODO: commit all db commands (not in loop but at very end so all commands get ran at once for maximum optimialness)
 
 # load nlp
 nlp = spacy.load('en_core_web_sm')
-neuralcoref.add_to_pipe(nlp, blacklist=False)
+neuralcoref.add_to_pipe(nlp, blacklist=False)  # disable blacklist to allow "i", "you", etc. to be resolved
 
 # instantiate google client
 client = language_v1.LanguageServiceClient()
@@ -28,37 +28,106 @@ MAX_DIST = timedelta(minutes=2)  # max amount of time between consecutive messag
 class Analyzer:
     def __init__(self, channel_id):
         self.channel_id = channel_id
+        self.channel = Channel.query.get(self.channel_id)
+        self.helper = Helper(self.channel_id)
 
     # starts analyzing the messages
-    def start_analysis(self, limit=5):
-        # add channel to database
-        db.session.add(Channel(id=self.channel_id, running=True, stage=0, progress=0))
+    # is idempotent as it does nothing if self.channel.running is True
+    def start_analysis(self):
+        print("starting analysis")
+
+        # check if channel previously analyzed
+        if self.channel is None:
+            # add channel to database
+            db.session.add(Channel(id=self.channel_id, running=False, stage=0, progress=0, limit=0))
+            db.session.commit()
+
+            self.channel = Channel.query.get(self.channel_id)
+            self.helper = Helper(self.channel_id)
+        elif self.channel.running:
+            # do not start another analysis if one is ongoing
+            print("channel is already running")
+            return
+        
+        # set running to true so other instances cannot analyze until this instance finishes
+        self.channel.running = True
+        
+        # reset progress
+        self.channel.progress = 0
         db.session.commit()
 
-        # store messages
-        print("getting messages")
-        self.get_messages(limit)
-        print("finished getting messages")
+        if self.channel.stage == 0:
+            # stage 0: set limit
+            pass
+        elif self.channel.stage == 1:
+            # stage 1: gather messages
+            self.channel.users = []  # remove user relationships
+            Message.query.filter(Message.channel_id == self.channel_id).delete()  # clear all messages
+            db.session.commit()
 
-        # cluster messages
-        print("clustering messages")
-        self.create_clusters()
-        print("finished clustering messages")
+            self.get_messages()
+        elif self.channel.stage == 2:
+            # stage 2: establish user alternates
+            self.channel.user_alternates.delete()  # clear all user alternates
+            db.session.commit()
 
-        # coreference resolution
-        print("starting coref")
-        self.resolve_coreferences()
-        print("finished coref")
+            pass
+        elif self.channel.stage == 3:
+            # stage 3: cluster messages
+            MessageCluster.query.filter(MessageCluster.channel_id == self.channel_id).delete()  # clear all message clusters
+            db.session.commit()
 
-        # sentiment analysis
-        print("starting sentiment")
-        self.analyze_sentiments()
-        print("finished sentiment")
+            self.create_clusters()
+        elif self.channel.stage == 4:
+            # stage 4: coreference resolution
+            coref_subquery = CorefMessage.query.join(Message, CorefMessage.message).filter(Message.channel_id == self.channel_id).with_entities(CorefMessage.id).subquery()
+            CorefMessage.query.filter(CorefMessage.id.in_(coref_subquery)).delete(synchronize_session=False)  # clear all coref messages
+            db.session.commit()
+
+            self.resolve_coreferences()
+        elif self.channel.stage == 5:
+            # stage 5: sentiment analysis
+            msg_sent_subquery = MessageSentiment.query.join(Message, MessageSentiment.message).filter(Message.channel_id == self.channel_id).with_entities(MessageSentiment.id).subquery()
+            user_sent_subquery = UserSentiment.query.join(Message, UserSentiment.message).filter(Message.channel_id == self.channel_id).with_entities(UserSentiment.id).subquery()
+
+            MessageSentiment.query.filter(MessageSentiment.id.in_(msg_sent_subquery)).delete(synchronize_session=False)  # clear message sentiments
+            UserSentiment.query.filter(UserSentiment.id.in_(user_sent_subquery)).delete(synchronize_session=False)  # clear user sentiments
+            db.session.commit()
+
+            self.analyze_sentiments()
+        else:
+            # stage X: finished
+            self.channel.running = False
+            db.session.commit()
+            return
+        
+        # move to the next stage if current stage wasnt aborted
+        print("about to upgrade stage")
+        if self.channel.running:
+            print("upgraded stage")
+            self.channel.stage = Channel.stage + 1
+            self.channel.running = False
+            db.session.commit()
+    
+    # stops analysis (analysis may continue for a short time until a breaking condition is reached)
+    # is idempotent
+    def stop_analysis(self):
+        if self.channel is not None:
+            self.channel.running = False
+
+    # # sets the max number of messages to analyze
+    # def set_limit(self, limit):
+    #     if self.channel is not None and self.channel.stage == 0:
+    #         self.channel.limit = limit
+    #         self.channel.stage = 1
+    #         self.channel.running = False
+    #         db.session.commit()
 
     # stores all messages in the channel in the database
-    def get_messages(self, limit):
+    def get_messages(self):
         last_id = None  # stores id of the last gotten message
         num_msgs = 0  # number of messages gotten
+        limit = self.channel.limit  # max number of messages to get
 
         while True:
             data = send_request(f"/channels/{self.channel_id}/messages?limit=100{f'&before={last_id}' if last_id else ''}")
@@ -68,28 +137,54 @@ class Analyzer:
                 break
             
             for message in data:
+                # make sure analysis is running
+                if not self.channel.running:
+                    break
+                
+                # stop once message limit has been reached
+                if num_msgs >= limit:
+                    break
+
                 # prepare message for analysis
-                message = prepare_message(message, self.channel_id)
+                message = self.helper.prepare_message(message)
                 if message is not None:
                     # store user and message in database
-                    add_user(message['author']['id'], self.channel_id)
+                    self.helper.add_user(message['author']['id'])
 
                     db.session.add(Message(id=message['id'], channel_id=self.channel_id, user_id=message['author']['id'], content=message['content'], timestamp=message['timestamp']))
                     num_msgs += 1
-
-                    # stop once message limit has been reached
-                    if num_msgs >= limit:
-                        break
+                    self.channel.progress = num_msgs  # update progress
+                    db.session.commit()
             
             # update id of last message
             last_id = data[-1]['id']
         
         db.session.commit()
+    
+    # # sets alternate names for each user
+    # # each alternate is formatted as ("user_id", "alternate name") | (string, string)
+    # def set_alternates(self, alternates):
+    #     if self.channel.stage != 2:
+    #         return
+        
+    #     for (user_id, alternate_name) in alternates:
+    #         # make sure analysis is running
+    #         if not self.channel.running:
+    #             break
+
+    #         # if the user exists in the channel
+    #         if self.channel.users.get(user_id) is not None:
+    #             db.session.add(UserAlternate(channel_id=self.channel_id, user_id=user_id, name=alternate_name))
+    #             self.channel.progress = Channel.progress + 1  # update progress
+        
+    #     self.channel.stage = 3
+    #     self.channel.running = False
+    #     db.session.commit()
 
     # creates message clusters based on time frame to prepare for coreference resolution
     def create_clusters(self):
         # get all messages
-        messages = Channel.query.get(self.channel_id).messages
+        messages = self.channel.messages
         messages_to_add = []  # messages that are going to be added to the current cluster
 
         # add all messages in messages_to_add to cluster
@@ -106,6 +201,7 @@ class Analyzer:
             for message_to_add in messages_to_add:
                 db.session.add(ClusterMessage(message_id=message_to_add.id, message_cluster_id=cluster.id))
             
+            self.channel.progress = Channel.progress + 1  # update progress
             messages_to_add = []
 
         # store times of first and last message in cluster
@@ -113,6 +209,10 @@ class Analyzer:
         last_time = first_time
 
         for message in messages:
+            # make sure analysis is running
+            if not self.channel.running:
+                break
+
             message_time = datetime.fromisoformat(message.timestamp)
 
             # check if message is not within the bounds of the current cluster
@@ -124,7 +224,7 @@ class Analyzer:
             last_time = message_time
         
         # add last cluster
-        if len(messages_to_add) > 0:
+        if len(messages_to_add) > 0 and self.channel.running:
             add_cluster()
         
         db.session.commit()
@@ -134,8 +234,12 @@ class Analyzer:
         user_pattern = re.compile(r"^.+ said $")  # pattern matches "username said "
 
         # get all clusters for this channel
-        clusters = Channel.query.get(self.channel_id).clusters
+        clusters = self.channel.clusters
         for cluster in clusters:
+            # make sure analysis is running
+            if not self.channel.running:
+                break
+
             # combine all messages in cluster to assist with coreference resolution
             combined_message = u""
 
@@ -153,6 +257,7 @@ class Analyzer:
             # create coref messages
             for (i, message) in enumerate(cluster.messages):
                 db.session.add(CorefMessage(cluster_message_id=message.id, content=coref_contents[i]))
+                self.channel.progress = Channel.progress + 1  # update progress
         
         db.session.commit()
 
@@ -173,6 +278,14 @@ class Analyzer:
 
                 # move to next message
                 offset -= len(message.content) + dist
+        
+        # returns the user associated with the alternate name
+        def find_user_alternate(name):
+            user_alternate = self.channel.user_alternates.filter(UserAlternate.name.ilike(name)).first()
+            if user_alternate is None:
+                return None
+            else:
+                return user_alternate.user
 
         # computes user and message sentiments for content
         def compute_sentiments(content):
@@ -195,9 +308,8 @@ class Analyzer:
             # calculate user sentiments
             entity_response = client.analyze_entity_sentiment(request={'document': document, 'encoding_type': encoding_type})
             for entity in entity_response.entities:
-                print("entity name:", entity.name)
-                # skip entity if not user
-                subject_user = Channel.query.get(self.channel_id).users.filter(User.username == entity.name).first()
+                # skip if user with name or alternate name does not exist
+                subject_user = self.channel.users.filter(User.username.ilike(entity.name)).first() or find_user_alternate(entity.name)
                 if subject_user is not None:
                     for mention in entity.mentions:
                         # find message using span of entity
@@ -207,12 +319,17 @@ class Analyzer:
                         # add user sentiment to database
                         db.session.add(UserSentiment(message_id=message_id, object_user_id=object_user.id, subject_user_id=subject_user.id, score=mention.sentiment.score, magnitude=mention.sentiment.magnitude))
             
+            self.channel.progress = Channel.progress + 1  # update progress
             db.session.commit()
         
         # stores content of document
         content = ""
         
         for message in messages:
+            # make sure analysis is running
+            if not self.channel.running:
+                break
+
             if len(message.content) + len(content) < 1000:
                 # add message to current group if character limit not reached
                 content += message.content + ". "
@@ -221,5 +338,5 @@ class Analyzer:
                 content = ""
 
         # compute last unit of messages
-        if len(content) > 0:
+        if len(content) > 0 and self.channel.running:
             compute_sentiments(content)
